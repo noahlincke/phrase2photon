@@ -396,6 +396,30 @@ button.danger {
   font-size: 11px;
 }
 
+.search-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 13px;
+}
+
+.search-input::placeholder {
+  color: var(--ink-faint);
+}
+
+/* The addressing mode decides how much of the cue catalogue is reachable, so
+   it sits with the live controls rather than inside a disclosure. */
+.addressing {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(148, 163, 184, 0.03);
+}
+
 .hint {
   color: var(--ink-faint);
   font-size: 11px;

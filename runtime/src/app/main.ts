@@ -14,6 +14,7 @@ import {
   type AudioInputDeviceLike
 } from "./micInputDevices.js";
 import { SHELL_TEMPLATE } from "./shell.js";
+import { createShowChannel, type ShowMessage } from "./showLink.js";
 import type { LoadedTrack, RuntimeInputMode } from "./types.js";
 import { buildNowPlayingMetaRows } from "./viewState.js";
 import { LiveAnalyzer, type LiveMusicalState } from "../audio/liveAnalysis.js";
@@ -112,6 +113,8 @@ const ui = {
   micFixedBpmValue: required<HTMLInputElement>("micFixedBpmValue"),
 
   trackList: required<HTMLDivElement>("trackList"),
+  librarySearch: required<HTMLInputElement>("librarySearch"),
+  libraryCount: required<HTMLElement>("libraryCount"),
   showCachedNowPlayingTracks: required<HTMLInputElement>("showCachedNowPlayingTracks"),
 
   nowPlayingModeState: required<HTMLElement>("nowPlayingModeState"),
@@ -462,39 +465,70 @@ ui.audio.addEventListener("loadedmetadata", () => {
   }
 });
 
-ui.fullscreenButton.addEventListener("click", () => void toggleFullscreen());
-document.addEventListener("fullscreenchange", () => {
-  updateFullscreenButton();
-  visuals.resize();
-  timeline.resize();
-});
+ui.fullscreenButton.addEventListener("click", () => openShowWindow());
 window.addEventListener("resize", () => {
   visuals.resize();
   timeline.resize();
 });
 
-async function toggleFullscreen(): Promise<void> {
-  if (!document.fullscreenEnabled) {
-    ui.fullscreenButton.textContent = "n/a";
-    return;
-  }
-  try {
-    if (document.fullscreenElement === ui.viewer) {
-      await document.exitFullscreen();
-    } else {
-      await ui.viewer.requestFullscreen();
-    }
-  } finally {
-    updateFullscreenButton();
-    visuals.resize();
-  }
+// ------------------------------------------------------ show output window
+
+/**
+ * The show output lives in its own window so it can be dragged onto a
+ * projector and made fullscreen with nothing drawn over it. Fullscreening the
+ * control window instead would put the readout and transport on the wall, and
+ * would tie the output to the display the controls happen to be on.
+ */
+const showChannel = createShowChannel();
+let showWindow: Window | null = null;
+
+function showWindowIsOpen(): boolean {
+  return showWindow !== null && !showWindow.closed;
 }
 
-function updateFullscreenButton(): void {
-  const active = document.fullscreenElement === ui.viewer;
-  ui.fullscreenButton.textContent = active ? "Exit" : "Full";
-  ui.fullscreenButton.setAttribute("aria-label", active ? "Exit fullscreen" : "Enter fullscreen");
-  ui.fullscreenButton.setAttribute("aria-pressed", String(active));
+function openShowWindow(): void {
+  if (showWindowIsOpen()) {
+    showWindow?.focus();
+    return;
+  }
+  showWindow = window.open(
+    "/show.html",
+    "phrase2photon-show",
+    "popup=yes,width=1280,height=720"
+  );
+  if (!showWindow) {
+    ui.hudStatus.textContent = "Allow pop-ups for this site to open the show window.";
+    return;
+  }
+  updateShowButton();
+  // window.closed does not fire an event, so poll it to keep the button honest.
+  const watch = window.setInterval(() => {
+    if (!showWindowIsOpen()) {
+      window.clearInterval(watch);
+      showWindow = null;
+      updateShowButton();
+    }
+  }, 1000);
+}
+
+showChannel?.addEventListener("message", (event: MessageEvent<ShowMessage>) => {
+  if (event.data.type === "closed") {
+    showWindow = null;
+    updateShowButton();
+  }
+});
+
+function updateShowButton(): void {
+  const open = showWindowIsOpen();
+  ui.fullscreenButton.textContent = open ? "Shown" : "Show";
+  ui.fullscreenButton.classList.toggle("selected", open);
+  ui.fullscreenButton.setAttribute(
+    "aria-label",
+    open ? "Show output window is open" : "Open the show output window"
+  );
+  ui.fullscreenButton.title = open
+    ? "Show output is open. Drag it to your projector and press F for fullscreen."
+    : "Open a clean output window to drag onto a projector.";
 }
 
 function updateTransportChrome(): void {
@@ -531,6 +565,14 @@ function renderLoop(nowMs: number): void {
   if (frame) {
     visuals.render(frame.musical, nowMs / 1000, delta);
     updateHud(frame);
+    if (showWindowIsOpen()) {
+      showChannel?.postMessage({
+        type: "frame",
+        frame: frame.musical,
+        sceneId: activeSceneId,
+        elapsedSeconds: nowMs / 1000
+      });
+    }
   }
   requestAnimationFrame(renderLoop);
 }
@@ -935,7 +977,7 @@ function shouldRenderFallbackPreview(): boolean {
 async function boot(): Promise<void> {
   applySceneSelection();
   visuals.setScene(activeSceneId, true);
-  updateFullscreenButton();
+  updateShowButton();
   updateTransportChrome();
   setInputMode("mic");
   await refreshMicDevices();
@@ -953,6 +995,8 @@ async function boot(): Promise<void> {
   await refreshCachedNowPlayingTracks();
   syncVisibleLibraryTracks();
 }
+
+ui.librarySearch.addEventListener("input", () => renderTrackList());
 
 ui.showCachedNowPlayingTracks.addEventListener("change", () => {
   localStorage.setItem(
@@ -978,13 +1022,43 @@ function syncVisibleLibraryTracks(): void {
   renderTrackList();
 }
 
+/**
+ * Case-insensitive match across the fields an operator would actually recall:
+ * title, artist and whatever note the show was filed with.
+ */
+function trackMatchesQuery(track: PublicLibraryTrack, query: string): boolean {
+  if (!query) {
+    return true;
+  }
+  const haystack = [track.title, track.artist ?? "", track.notes ?? ""].join(" ").toLowerCase();
+  // Every whitespace-separated term must appear, so "kolter let" narrows.
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => haystack.includes(term));
+}
+
 function renderTrackList(): void {
+  const query = ui.librarySearch.value.trim();
+  const matches = libraryTracks.filter((track) => trackMatchesQuery(track, query));
+
+  ui.libraryCount.textContent = !libraryTracks.length
+    ? ""
+    : query
+      ? `${matches.length} of ${libraryTracks.length} shows`
+      : `${libraryTracks.length} show${libraryTracks.length === 1 ? "" : "s"}`;
+
   if (!libraryTracks.length) {
     ui.trackList.innerHTML = `<div class="empty-state">No compiled shows found.</div>`;
     return;
   }
+  if (!matches.length) {
+    ui.trackList.innerHTML = `<div class="empty-state">Nothing matches that search.</div>`;
+    return;
+  }
   ui.trackList.replaceChildren(
-    ...libraryTracks.map((track) => {
+    ...matches.map((track) => {
       const item = document.createElement("div");
       item.className = track.id === selectedTrackId ? "track-card selected" : "track-card";
       item.innerHTML = `

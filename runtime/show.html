@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phrase2Photon — Show Output</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      /* Nothing is drawn over the output. The only overlay is a hint shown
+         before the control window has sent a frame, and it removes itself. */
+      #hint {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 6px;
+        justify-items: center;
+        color: #6b7682;
+        font: 13px Inter, ui-sans-serif, system-ui, sans-serif;
+        text-align: center;
+        pointer-events: none;
+        transition: opacity 400ms ease;
+      }
+      #hint.hidden {
+        opacity: 0;
+      }
+      body.playing {
+        cursor: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="output"></canvas>
+    <div id="hint">
+      <strong style="color: #9aa6b2; font-weight: 500">Show output</strong>
+      <span>Drag this window to your projector, then press F for fullscreen.</span>
+    </div>
+    <script type="module" src="/src/app/showWindow.ts"></script>
+  </body>
+</html>

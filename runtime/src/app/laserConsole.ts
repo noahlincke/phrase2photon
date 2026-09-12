@@ -61,6 +61,7 @@ const STORAGE = {
   rekordboxMute: "p2p.dmx.rekordboxLineFaderMute",
   holdForever: "p2p.dmx.debugHoldForever",
   catalogMode: "p2p.dmx.cueCatalogMode",
+  hideUnreachable: "p2p.dmx.hideUnreachableCues",
   catalogPage: "p2p.dmx.cueCatalogPage",
   catalogOverrides: "p2p.dmx.cueCatalog",
   calibration: "p2p.dmx.laserColorCalibration"
@@ -121,6 +122,7 @@ export class LaserConsole {
     );
     this.restoreSettings();
     this.bindEvents();
+    this.renderReach();
     this.renderCalibration();
     this.renderCatalog();
     this.startMixerPolling();
@@ -148,6 +150,7 @@ export class LaserConsole {
     this.input("geometryOverride").checked = localStorage.getItem(STORAGE.geometryOverride) === "true";
     this.input("holdForever").checked = localStorage.getItem(STORAGE.holdForever) === "true";
     this.input("catalogMode").checked = localStorage.getItem(STORAGE.catalogMode) === "true";
+    this.input("hideUnreachable").checked = localStorage.getItem(STORAGE.hideUnreachable) !== "false";
     for (const slider of GEOMETRY_SLIDERS) {
       const input = this.input(slider.key);
       input.value = localStorage.getItem(`p2p.dmx.${slider.key}`) || slider.fallback;
@@ -175,8 +178,13 @@ export class LaserConsole {
     });
     this.input("experimental39").addEventListener("change", () => {
       localStorage.setItem(STORAGE.experimental39, String(this.input("experimental39").checked));
+      this.renderReach();
       this.renderCatalog();
       void this.republish();
+    });
+    this.input("hideUnreachable").addEventListener("change", () => {
+      localStorage.setItem(STORAGE.hideUnreachable, String(this.input("hideUnreachable").checked));
+      this.renderCatalog();
     });
     this.input("host").addEventListener("change", () => {
       localStorage.setItem(STORAGE.host, this.input("host").value);
@@ -270,9 +278,34 @@ export class LaserConsole {
 
   // ----------------------------------------------------------------- public
 
-  /** Whether 39-channel cue targeting is enabled; frame building needs it. */
+  /** Whether 39-channel cue addressing is enabled; frame building needs it. */
   get experimental39Enabled(): boolean {
     return this.input("experimental39").checked;
+  }
+
+  /**
+   * How much of the catalogue the current addressing mode can actually select.
+   *
+   * In 16-channel mode the FB4 takes one coarse page byte and one coarse cue
+   * byte, which tops out at nine pages of 48 cues. The content pack is
+   * organised by artwork family instead - four families of 240 - so most of it
+   * simply has no 16-channel address. Saying so beats greying out a thousand
+   * rows with no explanation.
+   */
+  private reachSummary(): { reachable: number; total: number } {
+    const entries = this.catalogEntries();
+    return {
+      reachable: entries.filter((entry) => !fb4CueRequires39Channel(entry.page, entry.cue)).length,
+      total: entries.length
+    };
+  }
+
+  private renderReach(): void {
+    const { reachable, total } = this.reachSummary();
+    this.element.reach.textContent = this.experimental39Enabled
+      ? `All ${total} cues addressable. The FB4 must be set to its 39-channel personality.`
+      : `${reachable} of ${total} cues addressable in 16-channel mode. ` +
+        `Switch the FB4 to its 39-channel personality and enable this to reach the rest.`;
   }
 
   /**
@@ -641,7 +674,7 @@ export class LaserConsole {
     if (this.experimental39Enabled || !fb4CueRequires39Channel(entry.page, entry.cue)) {
       return null;
     }
-    return "Needs 39-channel cue targeting.";
+    return "No 16-channel address; needs 39-channel addressing.";
   }
 
   private async audition(entry: Fb4CueCatalogEntry): Promise<void> {
@@ -683,7 +716,15 @@ export class LaserConsole {
       })
     );
 
-    const entries = this.catalogEntries().filter((entry) => entry.page === this.selectedPage);
+    const onPage = this.catalogEntries().filter((entry) => entry.page === this.selectedPage);
+    const reachable = onPage.filter((entry) => this.unavailableReason(entry) === null);
+    const hiding = this.input("hideUnreachable").checked && reachable.length < onPage.length;
+    const entries = hiding ? reachable : onPage;
+
+    this.element.catalogCount.textContent = hiding
+      ? `Showing ${reachable.length} of ${onPage.length} on this page; ${onPage.length - reachable.length} need 39-channel addressing.`
+      : `${onPage.length} cues on this page.`;
+
     const editing = this.input("catalogMode").checked;
     this.element.catalog.replaceChildren(
       ...entries.map((entry) => (editing ? this.catalogEditRow(entry) : this.catalogRow(entry)))
@@ -968,6 +1009,14 @@ const TEMPLATE = /* html */ `
     <div data-laser="status" class="hint"></div>
   </div>
 
+  <div class="addressing">
+    <label class="toggle-row">
+      <input data-laser="experimental39" type="checkbox" />
+      <span>39-channel cue addressing</span>
+    </label>
+    <div data-laser="reach" class="hint"></div>
+  </div>
+
   <details class="subpanel">
     <summary>Connection</summary>
     <label class="field-row">
@@ -977,10 +1026,6 @@ const TEMPLATE = /* html */ `
     <label class="field-row">
       <span>Universe</span>
       <input data-laser="universe" type="number" min="0" max="32767" value="0" />
-    </label>
-    <label class="toggle-row">
-      <input data-laser="experimental39" type="checkbox" />
-      <span>39-channel cue targeting</span>
     </label>
     <label class="toggle-row">
       <input data-laser="rekordboxMute" type="checkbox" />
@@ -994,11 +1039,16 @@ const TEMPLATE = /* html */ `
     <div data-laser="catalogPages" class="chip-row"></div>
     <div class="button-row">
       <label class="toggle-row compact">
+        <input data-laser="hideUnreachable" type="checkbox" checked />
+        <span>Only reachable</span>
+      </label>
+      <label class="toggle-row compact">
         <input data-laser="catalogMode" type="checkbox" />
         <span>Annotate</span>
       </label>
       <button data-laser="exportCatalog" type="button">Export</button>
     </div>
+    <div data-laser="catalogCount" class="hint"></div>
     <div data-laser="catalog" class="cue-catalog"></div>
   </details>
 

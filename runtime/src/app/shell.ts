@@ -47,8 +47,13 @@ export const SHELL_TEMPLATE = /* html */ `
           <button type="button" data-dock="source">Source</button>
           <button type="button" data-dock="look">Look</button>
           <button type="button" data-dock="output">Output</button>
-          <button id="fullscreenButton" class="icon-button" type="button" aria-label="Enter fullscreen">
-            Full
+          <button
+            id="fullscreenButton"
+            class="icon-button"
+            type="button"
+            aria-label="Open the show output window"
+          >
+            Show
           </button>
         </nav>
       </div>
@@ -96,6 +101,15 @@ export const SHELL_TEMPLATE = /* html */ `
           </div>
 
           <div id="libraryPanel" class="panel-group" hidden>
+            <input
+              id="librarySearch"
+              class="search-input"
+              type="search"
+              placeholder="Search shows"
+              aria-label="Search the show library"
+              autocomplete="off"
+            />
+            <div id="libraryCount" class="hint"></div>
             <div id="trackList" class="track-list"></div>
             <label class="toggle-row">
               <input id="showCachedNowPlayingTracks" type="checkbox" />
