@@ -535,17 +535,65 @@ Phrase2Photon's current Rekordbox support can identify likely tracks and estimat
 
 The missing piece is a true transport clock from Rekordbox itself.
 
+## Current State
+
+The exact-clock plumbing on the Phrase2Photon side is already built and wired.
+`source_polling._apply_rekordbox_memory_clock` reads deck state from the probe
+and stamps the observation `position_source="exact"`, which the runtime then
+prefers over everything else. What is missing is a working source to feed it.
+
+Two things have decayed since the memory-read proof:
+
+- `REKORDBOX_MEMORY_APP_PATH` still points at
+  `~/Applications/rekordbox 7.2.8/rekordbox.app`, but that bundle has been
+  deleted. Only `drivers/`, `firmware/`, `residentmanager/` and `tools/` remain,
+  and the 920 MB installer is no longer on disk either. The memory clock is
+  therefore silently inert: the probe finds no process and returns no states.
+- The installed Rekordbox is now `7.2.16.0342`, so even after re-staging and
+  re-signing, the public `7.2.8` pointer offsets would not apply.
+
+The chosen direction is the `PSvLink` loopback route instead, because it needs
+no re-signing, no version pinning, and no downgrade.
+
+## Capture Tooling
+
+`scripts/psvlink_capture.py` exists to settle the open question empirically.
+
+    sudo python3 scripts/psvlink_capture.py capture --out /tmp/psvlink.pcap
+    python3 scripts/psvlink_capture.py decode /tmp/psvlink.pcap
+
+`capture` records UDP on the PSvLink ports and lets the operator mark what they
+did - `p` for playing, `s` for paused, `j` for a jump - into a sidecar marker
+file. `decode` recognises frames by the header magic, groups them by
+`(port, type, family, payload size)`, and then scores every integer field in
+every stream on how much it behaves like a playhead: advancing at a plausible
+rate while playing, not moving while paused, and changing discontinuously on a
+jump. A sequence counter passes the first test and fails the other two, which
+is exactly what the scoring is designed to separate.
+
+`tests/test_psvlink_capture.py` drives it from a synthetic pcap containing a
+known playhead and a decoy sequence counter, so if a real capture comes back
+empty we know that is Rekordbox being quiet rather than the tool being broken.
+
+One detail the disassembly notes do not pin down: where `"rekordbox"` sits in
+the header. It cannot start at `0x0a`, since that byte is the message type, so
+the parser searches the header for it rather than assuming an offset.
+
+## Open Question
+
+Whether a laptop-only Rekordbox with no Pro DJ Link peers sends anything at
+all. It binds the ports either way, and binding is all that has been observed
+so far - the notes record listeners, not traffic. If the capture comes back
+empty, this route is a dead end and the memory-read path is the fallback.
+
 ## Recommended Next Steps
 
-1. Capture loopback traffic on the `PSvLink` ports while loading, playing, pausing, and scrubbing.
-2. Correlate packet timing with obvious deck actions.
-3. Reverse-engineer the message framing for the local TCP and UDP listeners.
-4. Identify the smallest stable subset needed for:
-   - active track identity
-   - play/pause state
-   - current playback position
-   - BPM if available
-5. Add a dedicated Rekordbox clock adapter in Phrase2Photon once the packet format is understood.
+1. Run the capture above while loading, playing, pausing, and scrubbing.
+2. If frames appear, read off the playhead candidates and pin the field.
+3. Add a `psvlink` poller alongside the memory clock, stamping
+   `position_source="exact"`.
+4. If nothing appears, re-stage a re-signable Rekordbox and derive fresh
+   pointer offsets for the installed version.
 
 ## Practical Reminder
 
