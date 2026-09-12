@@ -72,4 +72,6 @@ export interface NowPlayingStatus {
   preparing: NowPlayingPreparation | null;
   providerAttempts: NowPlayingProviderAttempt[];
   sourceDiagnostics?: NowPlayingSourceDiagnostics | null;
+  /** One line on whether measured tempo is available; see track_analysis.py. */
+  analyzer?: string | null;
 }

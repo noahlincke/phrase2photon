@@ -10,6 +10,7 @@ __pycache__/
 node_modules/
 runtime/node_modules/
 runtime/dist/
+runtime/dist-analyzer/
 runtime/coverage/
 runtime/test-results/
 runtime/playwright-report/

@@ -38,6 +38,7 @@ from phrase2photon.now_playing.source_polling import (
     poll_system_now_playing,
     poll_virtualdj,
 )
+from phrase2photon.now_playing.track_analysis import analyze_track, describe_analyzer_state
 from phrase2photon.now_playing.wav_analysis import analyze_audio_sections, build_wav_analysis_extraction
 
 ProviderFn = Callable[[TrackObservation], list[ProviderCandidate]]
@@ -513,6 +514,11 @@ def _matches_exact_disk_source_hint(observation: TrackObservation, candidate: Pr
     )
 
 
+# Used only when the runtime analyser is unavailable. Any fixed tempo is
+# wrong for most tracks; this keeps Now Playing running rather than correct.
+FALLBACK_TEMPO = 124.0
+
+
 def show_dir_for_identity(audio_identity: str, *, cache_root: Path | None = None) -> Path:
     root = cache_root or now_playing_cache_root()
     return root / audio_identity / "show"
@@ -531,13 +537,25 @@ def ensure_compiled_show(
         resolved.show_dir = show_dir
         return show_dir
 
+    duration_seconds = resolved.asset.measured_duration_seconds
+    # Prefer the runtime's analyser: it is the same code the live and library
+    # paths use, and it is validated against Mixed In Key. The heuristic below
+    # is only a fallback for when the analyser bundle has not been built.
+    analysis = analyze_track(cached_audio)
+    if analysis is not None:
+        tempo = analysis.tempo
+        sections = analysis.sections
+    else:
+        tempo = FALLBACK_TEMPO
+        sections = analyze_audio_sections(cached_audio, duration_seconds=duration_seconds, tempo=tempo)
+
     extraction = build_wav_analysis_extraction(
         audio_path=cached_audio,
         title=resolved.observation.title,
         artist=resolved.observation.artist,
-        duration_seconds=resolved.asset.measured_duration_seconds,
-        tempo=124.0,
-        sections=analyze_audio_sections(cached_audio, duration_seconds=resolved.asset.measured_duration_seconds),
+        duration_seconds=duration_seconds,
+        tempo=tempo,
+        sections=sections,
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
     extraction_path = cache_dir / "wav-analysis.extraction.json"
@@ -594,6 +612,7 @@ def build_status_payload(
         "preparing": preparing,
         "providerAttempts": [_provider_attempt_payload(attempt) for attempt in provider_attempts],
         "sourceDiagnostics": source_diagnostics,
+        "analyzer": describe_analyzer_state(),
     }
 
 

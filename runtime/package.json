@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Code-native Phrase-to-Photon graphics runtime proof of concept.",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && npm run build:analyzer",
     "dev": "vite --host 127.0.0.1",
     "e2e": "playwright test",
     "typecheck": "tsc --noEmit",
@@ -17,7 +17,8 @@
     "bench:track": "npm run bench:build && node .analysis-cache/build/scripts/analysis/beatDiag.js",
     "bench:live": "npm run bench:build && node .analysis-cache/build/scripts/analysis/liveBenchmark.js",
     "bench:energy": "npm run bench:build && node .analysis-cache/build/scripts/analysis/energyStudy.js",
-    "render:scene-demo": "node ./scripts/renderSceneDemo.mjs"
+    "render:scene-demo": "node ./scripts/renderSceneDemo.mjs",
+    "build:analyzer": "node ./scripts/buildAnalyzer.mjs"
   },
   "dependencies": {
     "three": "^0.176.0",

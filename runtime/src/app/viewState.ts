@@ -42,6 +42,14 @@ export function buildNowPlayingMetaRows(input: BuildNowPlayingMetaRowsInput): st
     rows.push(`Preloading show: ${input.preparingShowId}`);
   }
 
+  // Worth saying out loud: without the analyser bundle, shows are compiled at
+  // an assumed tempo, which looks like a detection failure rather than a
+  // missing build step.
+  const analyzer = input.status?.analyzer;
+  if (analyzer && analyzer !== "analyser ready.") {
+    rows.push(analyzer);
+  }
+
   if (input.status?.preparedAudio && input.outputMode !== "premade_active") {
     rows.push(
       `Audio ready via ${input.status.preparedAudio.provider} · ${Math.round(input.status.preparedAudio.durationSeconds)}s`

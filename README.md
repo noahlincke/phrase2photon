@@ -1,13 +1,23 @@
 # Phrase2Photon
 
-Beat- and phrase-aware visuals for live electronic music. Point it at a
-microphone, and it locks to the tempo, finds the bar and phrase grid, tracks
-where the track is in its arrangement, and drives GPU-rendered visuals and an
-optional laser lane from that.
+Beat- and phrase-aware visuals for live electronic music. It locks to the
+tempo, finds the bar and phrase grid, tracks where a track is in its
+arrangement, and drives GPU-rendered visuals and an optional laser lane from
+that.
 
-It also runs from a file, or from a show package compiled ahead of time out of
-an Ableton arrangement, but the microphone is the primary path and the one that
-gets measured.
+Three ways to feed it, all first-class:
+
+- **Mic** — listen to the room or a loopback device and analyse in real time.
+  Nothing to prepare; works with any DJ setup, including someone else's.
+- **Library** — play a show compiled ahead of time from an Ableton
+  arrangement. The arrangement *is* the ground truth, so the phrase map is
+  exact and repeatable, which is what you want for a planned set.
+- **Now Playing** — watch rekordbox, VirtualDJ or macOS Now Playing, find the
+  file that is actually playing, analyse it once, cache the show, and follow
+  along. Full-track accuracy with no preparation and no microphone.
+
+They share one analysis core and one rendering system; the difference is only
+where the musical timeline comes from.
 
 ## Why
 
@@ -37,7 +47,9 @@ through the live microphone path in 128-sample blocks:
 | Time to tempo lock | — | 7.6 s, locks on every track |
 
 The live path is at parity with full static analysis on the beat grid, which is
-the number that matters: the microphone is not a degraded mode.
+the number that matters: the microphone is not a degraded mode. The offline
+column is also what Now Playing gets, since it analyses the whole file before
+the show is compiled.
 
 Deciding *which* of four beats starts the bar is the weak point, at roughly 53%
 offline and 44% live. In four-to-the-floor music the kick plays on every beat,
@@ -56,7 +68,8 @@ runtime/src/graphics/   GLSL scenes and the palette system
 runtime/src/app/        Application shell, transport, microphone capture
 runtime/src/dmx/        Pangolin FB4 Art-Net output lane
 runtime/scripts/analysis/  Accuracy harness and parameter studies
-src/phrase2photon/      Python compiler: Ableton arrangement -> show package
+src/phrase2photon/      Python compiler: arrangement or audio -> show package
+src/phrase2photon/now_playing/  DJ-application watcher and show cache
 docs/                   Architecture and research notes
 ```
 
@@ -79,8 +92,17 @@ npm install
 npm run dev            # http://127.0.0.1:5173
 ```
 
-Pick **Source → Mic**, choose an input, press Listen. A loopback device such as
-BlackHole works well for feeding it the audio you are already playing.
+Pick a source:
+
+- **Mic** — choose an input and press Listen. A loopback device such as
+  BlackHole works well for feeding it the audio you are already playing.
+- **Library** — pick a compiled show. The search box filters by title and
+  artist as the library grows.
+- **Now Playing** — start the watcher (below) and it arms whatever your DJ
+  application is playing.
+
+**Show** pops the render out into a bare window with no HUD, meant to be
+dragged to a projector or second display; the controls stay on the main window.
 
 ```bash
 npm test               # unit tests
@@ -106,7 +128,7 @@ npm run bench:mik  -- --limit 150 --min-bpm 115 --max-bpm 145
 npm run bench:live -- --limit 150 --min-bpm 115 --max-bpm 145
 ```
 
-### Compiling a show from Ableton
+### Library: compiling a show from Ableton
 
 The Python side turns an arrangement into a typed show package, so a
 pre-planned set can be driven deterministically instead of detected live:
@@ -118,6 +140,27 @@ pytest
 
 Compiled shows land in `~/Phrase2PhotonShows/<song-slug>/`, and the dev server
 reads `~/Phrase2PhotonShows/library.json` to list them.
+
+### Now Playing: following a DJ application
+
+```bash
+python -m phrase2photon.cli now-playing-serve
+```
+
+It polls rekordbox, VirtualDJ and the macOS Now Playing service, resolves the
+track to a file on disk, decodes it, runs the same analyser used everywhere
+else, compiles a show from the detected tempo and phrase map, and caches it
+under `~/.cache/phrase2photon/now-playing/`. The second time you play a track
+it arms instantly.
+
+The analyser is a bundled build of the runtime detector:
+
+```bash
+cd runtime && npm run build:analyzer
+```
+
+`npm run build` does this too. Without it, Now Playing falls back to a
+level-based heuristic at an assumed tempo and says so in its status.
 
 ## Laser output
 
@@ -132,7 +175,7 @@ catalogue works without them, just without preview images.
 
 ## Status
 
-Used in practice, still moving. The microphone path, the visuals and the laser
+Used in practice, still moving. All three sources, the visuals and the laser
 lane work; tempo detection is solid for four-to-the-floor material and less so
 outside it, and bar-phase detection is the open problem.
 
