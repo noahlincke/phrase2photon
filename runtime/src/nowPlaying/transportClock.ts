@@ -6,6 +6,18 @@ export function isBrowserAudioTransportSource(sourceKind: LoadedSourceKind): boo
   return sourceKind === "library";
 }
 
+/**
+ * Whether the source app is reporting a real transport clock.
+ *
+ * Only an exact clock survives the things DJs actually do - pausing, looping,
+ * jumping to a cue - so this decides whether the position can be trusted or
+ * whether something else has to supply it.
+ */
+export function nowPlayingClockIsExact(status: NowPlayingStatus | null): boolean {
+  const observation = status?.observation;
+  return observation?.positionSource === "exact" && observation.playbackPositionSeconds !== null;
+}
+
 export function resolveNowPlayingPlaybackSeconds(
   status: NowPlayingStatus | null,
   nowEpochMs: number

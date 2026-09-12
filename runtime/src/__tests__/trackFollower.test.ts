@@ -172,7 +172,7 @@ describe("describeFollower", () => {
         loop: { beats: 4, startSeconds: 40, endSeconds: 41.9, repeats: 3 }
       }
     });
-    expect(text).toBe("Following deck · 4-beat loop ×3");
+    expect(text).toBe("Following deck by ear · 4-beat loop ×3");
   });
 
   it("explains a failure rather than silently falling back", () => {

@@ -149,6 +149,7 @@ def poll_osascript_app(
         duration_seconds=duration_seconds,
         observed_at=observed_at or datetime.now(timezone.utc),
         playback_position_seconds=playback_position_seconds,
+        position_source=None if playback_position_seconds is None else "exact",
         is_playing=is_playing,
     )
 
@@ -289,6 +290,7 @@ def poll_rekordbox_log_and_db(
                 observation = observation.model_copy(
                     update={
                         "playback_position_seconds": 0.0,
+                        "position_source": "estimated",
                         "is_playing": True,
                     }
                 )
@@ -804,6 +806,7 @@ def _observation_from_open_audio_candidate(
         observed_at=observed_at,
         source_hint_path=candidate.path,
         playback_position_seconds=playback_position_seconds,
+        position_source=None if playback_position_seconds is None else "estimated",
         is_playing=playback_position_seconds is not None or candidate.offset_delta > 0,
     )
 
@@ -829,6 +832,7 @@ def _observation_from_rekordbox_record(
         observed_at=observed_at or datetime.now(timezone.utc),
         source_hint_path=record.local_path,
         playback_position_seconds=playback_position_seconds,
+        position_source=None if playback_position_seconds is None else "estimated",
         is_playing=playback_position_seconds is not None,
     )
 
@@ -858,6 +862,7 @@ def _apply_rekordbox_memory_clock(
             "artist": matching_state.artist if matching_state.artist is not None else observation.artist,
             "album": matching_state.album if matching_state.album is not None else observation.album,
             "playback_position_seconds": min(observation.duration_seconds, playback_position_seconds),
+            "position_source": "exact",
             "is_playing": is_playing,
             "observed_at": datetime.now(timezone.utc),
         }
@@ -905,6 +910,7 @@ def _apply_rekordbox_open_file_baseline(
                 update={
                     "observed_at": latest_event.observed_at,
                     "playback_position_seconds": 0.0,
+                    "position_source": "estimated",
                     "is_playing": True,
                 }
             )
@@ -913,6 +919,7 @@ def _apply_rekordbox_open_file_baseline(
         return observation.model_copy(
             update={
                 "playback_position_seconds": 0.0,
+                "position_source": "estimated",
                 "is_playing": True,
             }
         )

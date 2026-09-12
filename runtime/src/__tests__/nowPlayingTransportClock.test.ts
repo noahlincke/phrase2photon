@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   isBrowserAudioTransportSource,
+  nowPlayingClockIsExact,
   resolveNowPlayingPlaybackSeconds,
   resolveNowPlayingPlaybackDurationSeconds
 } from "../nowPlaying/transportClock.js";
+import type { NowPlayingObservation, NowPlayingStatus } from "../nowPlaying/types.js";
 
 describe("now-playing transport clock", () => {
   it("treats library as the only browser-audio-driven source", () => {
@@ -23,6 +25,7 @@ describe("now-playing transport clock", () => {
           durationSeconds: 453.7,
           observedAt: "2026-05-16T21:50:25.000Z",
           playbackPositionSeconds: 127.25,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: "show-a",
@@ -53,6 +56,7 @@ describe("now-playing transport clock", () => {
           durationSeconds: 453.7,
           observedAt: "2026-05-16T21:50:25.000Z",
           playbackPositionSeconds: 127.25,
+          positionSource: "estimated",
           isPlaying: false
         },
         activeShowId: "show-a",
@@ -82,6 +86,7 @@ describe("now-playing transport clock", () => {
         durationSeconds: 159,
         observedAt: "2026-05-16T20:59:53.878731Z",
         playbackPositionSeconds: 48.25,
+        positionSource: "estimated",
         isPlaying: true
       },
       activeShowId: "track-a",
@@ -97,5 +102,49 @@ describe("now-playing transport clock", () => {
     });
 
     expect(duration).toBeCloseTo(159.375, 5);
+  });
+});
+
+describe("nowPlayingClockIsExact", () => {
+  const observation: NowPlayingObservation = {
+    sourceApp: "Rekordbox",
+    title: "Track",
+    artist: "Artist",
+    durationSeconds: 300,
+    observedAt: "2026-05-16T20:59:53.878731Z",
+    playbackPositionSeconds: 48.25,
+    positionSource: "exact",
+    isPlaying: true
+  };
+
+  const statusWith = (overrides: Partial<NowPlayingObservation>): NowPlayingStatus =>
+    ({
+      modeState: "premade_active",
+      observation: { ...observation, ...overrides },
+      activeShowId: null,
+      armedShow: null,
+      preparedAudio: null,
+      preparing: null,
+      providerAttempts: []
+    }) as unknown as NowPlayingStatus;
+
+  it("trusts a source app that reports its own transport", () => {
+    expect(nowPlayingClockIsExact(statusWith({}))).toBe(true);
+  });
+
+  it("does not trust a position inferred from file read offsets", () => {
+    expect(nowPlayingClockIsExact(statusWith({ positionSource: "estimated" }))).toBe(false);
+  });
+
+  it("does not trust a source that says nothing about where the position came from", () => {
+    expect(nowPlayingClockIsExact(statusWith({ positionSource: null }))).toBe(false);
+  });
+
+  it("is not fooled by an exact label with no position behind it", () => {
+    expect(nowPlayingClockIsExact(statusWith({ playbackPositionSeconds: null }))).toBe(false);
+  });
+
+  it("handles no status at all", () => {
+    expect(nowPlayingClockIsExact(null)).toBe(false);
   });
 });

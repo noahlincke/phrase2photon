@@ -67,6 +67,7 @@ describe("fetchNowPlayingStatus", () => {
           duration_seconds: 159,
           observed_at: "2026-05-16T20:59:53.878731Z",
           playback_position_seconds: 48.25,
+          position_source: "estimated",
           is_playing: true
         },
         activeShowId: "f1b5cc5958f1c263",
@@ -119,6 +120,7 @@ describe("fetchNowPlayingStatus", () => {
       durationSeconds: 159,
       observedAt: "2026-05-16T20:59:53.878731Z",
       playbackPositionSeconds: 48.25,
+      positionSource: "estimated",
       isPlaying: true
     });
     expect(payload.modeState).toBe("premade_active");

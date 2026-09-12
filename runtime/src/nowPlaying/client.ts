@@ -1,4 +1,4 @@
-import type { NowPlayingStatus } from "./types.js";
+import type { NowPlayingObservation, NowPlayingStatus } from "./types.js";
 
 export async function fetchNowPlayingStatus(
   fetchImpl = fetch
@@ -113,6 +113,7 @@ function normalizeObservation(
     durationSeconds: readNumber(record, "durationSeconds", "duration_seconds") ?? 0,
     observedAt: readString(record, "observedAt", "observed_at") ?? "",
     playbackPositionSeconds: readNumber(record, "playbackPositionSeconds", "playback_position_seconds"),
+    positionSource: readPositionSource(record),
     isPlaying: readBoolean(record, "isPlaying", "is_playing")
   };
 }
@@ -262,6 +263,13 @@ function normalizeOpenAudioCandidate(
     selected: readBoolean(value, "selected", "selected") ?? false,
     matchedRecord: readBoolean(value, "matchedRecord", "matched_record") ?? false
   };
+}
+
+function readPositionSource(
+  value: Record<string, unknown>
+): NowPlayingObservation["positionSource"] {
+  const candidate = readString(value, "positionSource", "position_source");
+  return candidate === "exact" || candidate === "estimated" ? candidate : null;
 }
 
 function readString(

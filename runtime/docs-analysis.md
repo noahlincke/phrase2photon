@@ -105,10 +105,15 @@ the obvious first guess:
 
 `src/audio/follower.ts` answers a different question from the rest of the
 analyser. Everything else asks "what is this audio doing"; the follower already
-knows the track and asks "where in it are we". That matters because a DJ
-application's reported position cannot answer it - rekordbox's is inferred from
-file read offsets, which never move backwards, so a four-bar loop leaves the
-show running on a timeline the deck has already left.
+knows the track and asks "where in it are we".
+
+It is a fallback, and should be read as one. When a source app reports a real
+transport clock, that clock wins and none of this runs - see `PositionSource`
+in `now_playing/models.py`. The follower exists for sources that cannot be
+asked: a club CDJ, someone else's laptop, an app with no position of its own.
+It also covers rekordbox today, whose reported position is inferred from file
+read offsets and never moves backwards, so a four-bar loop leaves the show
+running on a timeline the deck has already left.
 
 The track's analysis becomes a reference print and the live signal is matched
 against it. Three design decisions carry the result.

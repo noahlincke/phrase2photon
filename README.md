@@ -14,8 +14,8 @@ Three ways to feed it, all first-class:
   exact and repeatable, which is what you want for a planned set.
 - **Now Playing** — watch rekordbox, VirtualDJ or macOS Now Playing, find the
   file that is actually playing, analyse it once, cache the show, and follow
-  along. Full-track accuracy with no preparation. Turn the microphone on as
-  well and it follows the deck through loops and cue jumps too.
+  along. Full-track accuracy with no preparation, and it follows the deck's
+  own transport clock where one is available.
 
 They share one analysis core and one rendering system; the difference is only
 where the musical timeline comes from.
@@ -164,22 +164,37 @@ cd runtime && npm run build:analyzer
 `npm run build` does this too. Without it, Now Playing falls back to a
 level-based heuristic at an assumed tempo and says so in its status.
 
-## Following a deck
+## Where the playhead comes from
 
 A DJ does not play a track from start to finish. They loop four bars over a
-transition, drop back to a hot cue, ride the pitch fader. A DJ application's
-reported position does not survive any of that - rekordbox's is inferred from
-file read offsets and never moves backwards at all - so a show driven from it
-is running on a timeline the DJ has already left.
+transition, drop back to a hot cue, ride the pitch fader. A show driven from a
+position that only ever moves forward is running on a timeline the DJ has
+already left.
 
-With Now Playing armed and the microphone listening, the analysed track becomes
-a reference and the live signal is matched against it continuously. The
-position then comes from what is actually audible, so a loop is not a special
-case to be told about: it is the matched position going back by a round number
-of beats.
+Now Playing takes the playhead from the best source available, in this order:
 
-Measured over 40 Mixed In Key tracks replayed as simulated performances
-(`npm run bench:follow`):
+1. **The source app's own transport clock**, when it reports one. Nothing beats
+   being told. Observations carry a `position_source` of `exact` in that case.
+2. **Listening**, when it does not. See below.
+3. **Projecting the app's estimate forward**, as a last resort. Rekordbox's
+   position is inferred from how far through the file it has read, so it is
+   coarse and never moves backwards - marked `estimated`, and only used when
+   there is nothing better.
+
+`docs/rekordbox-reverse-engineering.md` covers the work to get an exact clock
+out of rekordbox specifically, which is ongoing.
+
+### Following by ear
+
+For sources that cannot be asked - a club CDJ, someone else's laptop, an app
+with no position of its own - the analysed track becomes a reference and the
+microphone signal is matched against it continuously. A loop is then not a
+special case to be told about: it is the matched position going back by a round
+number of beats.
+
+This is a fallback and it earns its place, but it is a lot of signal processing
+to work out something the source app already knows. Measured over 40 Mixed In
+Key tracks replayed as simulated performances (`npm run bench:follow`):
 
 | | |
 | --- | --- |

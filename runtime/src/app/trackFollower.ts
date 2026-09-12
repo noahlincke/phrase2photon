@@ -14,6 +14,11 @@ import type { BuildPrintRequest, BuildPrintResponse } from "./followerWorker.js"
  * Pointing the microphone at the same audio closes that gap. The analysed
  * track becomes a reference and the live signal is matched against it, which
  * makes loops and cue jumps ordinary rather than special.
+ *
+ * This is a fallback, not the preferred answer. When a source app reports a
+ * real transport clock - see `PositionSource` in models.py - that clock wins,
+ * and none of this runs. It exists for the sources that cannot be asked: a
+ * club CDJ, someone else's laptop, an app with no position of its own.
  */
 
 export type TrackFollowerState = "idle" | "preparing" | "following" | "failed";
@@ -232,9 +237,9 @@ export function describeFollower(snapshot: TrackFollowerSnapshot): string | null
         return "Listening for the deck…";
       }
       if (follow.loop !== null) {
-        return `Following deck · ${follow.loop.beats}-beat loop ×${follow.loop.repeats}`;
+        return `Following deck by ear · ${follow.loop.beats}-beat loop ×${follow.loop.repeats}`;
       }
-      return "Following deck";
+      return "Following deck by ear";
     }
   }
 }

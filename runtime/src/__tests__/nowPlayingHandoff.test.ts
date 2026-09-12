@@ -16,6 +16,7 @@ describe("Now Playing handoff", () => {
           sourceApp: "Spotify",
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: null,
@@ -55,6 +56,7 @@ describe("Now Playing handoff", () => {
           sourceApp: "Spotify",
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: "current-show",
@@ -94,6 +96,7 @@ describe("Now Playing handoff", () => {
           sourceApp: "Spotify",
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: "current-show",
@@ -134,6 +137,7 @@ describe("Now Playing handoff", () => {
           sourceApp: "Spotify",
           observedAt: "2026-05-15T22:42:00Z",
           playbackPositionSeconds: 12,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: "track-same",
@@ -174,6 +178,7 @@ describe("Now Playing handoff", () => {
           sourceApp: "Spotify",
           observedAt: "2026-05-15T22:43:00Z",
           playbackPositionSeconds: 12,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: "track-live",
@@ -208,6 +213,7 @@ describe("Now Playing handoff", () => {
           sourceApp: "Spotify",
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: null,

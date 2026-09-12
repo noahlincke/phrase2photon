@@ -10,6 +10,14 @@ export interface NowPlayingObservation {
   durationSeconds: number;
   observedAt: string;
   playbackPositionSeconds: number | null;
+  /**
+   * How the position was obtained; see `PositionSource` in models.py.
+   *
+   * "exact" is a real transport clock from the source app. "estimated" is
+   * inferred from how far through the file Rekordbox has read, which never
+   * moves backwards and so cannot survive a loop or a cue jump.
+   */
+  positionSource: "exact" | "estimated" | null;
   isPlaying: boolean | null;
 }
 

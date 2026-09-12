@@ -2,8 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+PositionSource = Literal["exact", "estimated"]
+"""Where a reported playback position came from, and how much to trust it.
+
+``exact`` means the source app told us the playhead: a transport clock that
+freezes when paused and jumps when the DJ jumps. ``estimated`` means we
+inferred it, currently from how far through the file Rekordbox has read, which
+is coarse and never moves backwards - so it cannot survive a loop or a cue
+jump. Consumers pick a position source with this rather than by guessing from
+the app name.
+"""
 
 
 class TrackObservation(BaseModel):
@@ -15,6 +27,7 @@ class TrackObservation(BaseModel):
     observed_at: datetime
     source_hint_path: Path | None = None
     playback_position_seconds: float | None = Field(default=None, ge=0)
+    position_source: PositionSource | None = None
     is_playing: bool | None = None
 
 

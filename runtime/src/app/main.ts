@@ -43,6 +43,7 @@ import {
 import {
   isBrowserAudioTransportSource,
   resolveNowPlayingPlaybackDurationSeconds,
+  nowPlayingClockIsExact,
   resolveNowPlayingPlaybackSeconds
 } from "../nowPlaying/transportClock.js";
 import type { NowPlayingStatus } from "../nowPlaying/types.js";
@@ -966,10 +967,18 @@ function currentPlaybackSeconds(): number | null {
   if (isBrowserAudioTransportSource(loadedSourceKind)) {
     return Number.isFinite(ui.audio.currentTime) ? ui.audio.currentTime : 0;
   }
-  // A Now Playing deck has no local transport. If the microphone can hear it,
-  // matching that against the analysed track beats the service's projection,
-  // which assumes the track plays start to finish and so cannot survive a
-  // loop, a cue jump or a scrub.
+  // A Now Playing deck has no local transport of its own, so the position has
+  // to come from somewhere else. In order of preference:
+  //
+  //   1. A real transport clock from the source app, when it reports one.
+  //      Nothing beats being told.
+  //   2. Matching the microphone against the analysed track, which costs a
+  //      pile of signal processing but works for any source.
+  //   3. Projecting the source app's estimate forward, which assumes the track
+  //      plays start to finish and so breaks on the first loop or cue jump.
+  if (nowPlayingClockIsExact(nowPlayingStatus)) {
+    return resolveNowPlayingPlaybackSeconds(nowPlayingStatus, Date.now()) ?? 0;
+  }
   const follow = deckFollower.snapshot.follow;
   if (deckFollower.following && follow !== null) {
     return follow.positionSeconds;
@@ -1303,7 +1312,10 @@ async function prepareDeckFollowing(): Promise<void> {
     loadedSourceKind !== "now-playing" ||
     !micCapture.running ||
     !audioUrl ||
-    !tempo
+    !tempo ||
+    // The source app is already reporting a real clock, so there is nothing
+    // for the microphone to work out.
+    nowPlayingClockIsExact(nowPlayingStatus)
   ) {
     return;
   }

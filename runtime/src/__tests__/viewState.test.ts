@@ -32,6 +32,7 @@ describe("view-state helpers", () => {
           durationSeconds: 243,
           observedAt: "2026-06-13T18:12:00Z",
           playbackPositionSeconds: 37,
+          positionSource: "estimated",
           isPlaying: true
         },
         activeShowId: null,
