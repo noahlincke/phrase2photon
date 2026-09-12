@@ -14,7 +14,8 @@ Three ways to feed it, all first-class:
   exact and repeatable, which is what you want for a planned set.
 - **Now Playing** — watch rekordbox, VirtualDJ or macOS Now Playing, find the
   file that is actually playing, analyse it once, cache the show, and follow
-  along. Full-track accuracy with no preparation and no microphone.
+  along. Full-track accuracy with no preparation. Turn the microphone on as
+  well and it follows the deck through loops and cue jumps too.
 
 They share one analysis core and one rendering system; the difference is only
 where the musical timeline comes from.
@@ -65,6 +66,7 @@ measurement harness, and the findings that contradicted the obvious guess.
 ```text
 runtime/src/audio/      Analysis: onsets, tempo, beats, bar grid, phrases
 runtime/src/graphics/   GLSL scenes and the palette system
+runtime/src/audio/follower.ts  Deck following: position, loops, cue jumps
 runtime/src/app/        Application shell, transport, microphone capture
 runtime/src/dmx/        Pangolin FB4 Art-Net output lane
 runtime/scripts/analysis/  Accuracy harness and parameter studies
@@ -161,6 +163,43 @@ cd runtime && npm run build:analyzer
 
 `npm run build` does this too. Without it, Now Playing falls back to a
 level-based heuristic at an assumed tempo and says so in its status.
+
+## Following a deck
+
+A DJ does not play a track from start to finish. They loop four bars over a
+transition, drop back to a hot cue, ride the pitch fader. A DJ application's
+reported position does not survive any of that - rekordbox's is inferred from
+file read offsets and never moves backwards at all - so a show driven from it
+is running on a timeline the DJ has already left.
+
+With Now Playing armed and the microphone listening, the analysed track becomes
+a reference and the live signal is matched against it continuously. The
+position then comes from what is actually audible, so a loop is not a special
+case to be told about: it is the matched position going back by a round number
+of beats.
+
+Measured over 40 Mixed In Key tracks replayed as simulated performances
+(`npm run bench:follow`):
+
+| | |
+| --- | --- |
+| Median position error | 27 ms |
+| Position within 100 ms | 77.8% of the time |
+| Cue jumps detected | 100% |
+| Loops detected | 53.5% |
+| Loop length correct when detected | 94% |
+| Spurious loop reports | 4 across 40 tracks |
+| Detection latency | 1.1 s |
+
+Cue jumps are easy because the audio after one is unrelated to the audio
+before. Loops are hard for a reason worth stating: the detector rests on a
+looping deck replaying the *same samples*, while musical repetition only sounds
+similar - but dance music is built from copy-pasted bars, so a track can repeat
+at a four-beat lag almost as exactly as a deck does. `npm run bench:loopsep`
+measures that overlap directly, and the threshold is chosen from it rather than
+guessed. Roughly half of loops are caught; the ones that are not are in
+material so repetitive that carrying on straight through looks the same and
+mostly *is* the same.
 
 ## Laser output
 

@@ -7,6 +7,7 @@ import { escapeHtml, formatTime } from "./html.js";
 import { LaserConsole } from "./laserConsole.js";
 import { buildLiveShow, livePhraseFor } from "./liveShow.js";
 import { MicCapture } from "./micCapture.js";
+import { TrackFollowerSession, describeFollower } from "./trackFollower.js";
 import {
   describeAudioInputDevice,
   isAudioInputDevice,
@@ -136,6 +137,7 @@ const visuals = new VisualSystem(ui.canvas);
 const timeline = new AudioTimeline(ui.audioTimeline);
 const fileAnalyser = new AudioAnalyser();
 const micCapture = new MicCapture();
+const deckFollower = new TrackFollowerSession();
 
 const MIC_DEVICE_KEY = "p2p.mic.deviceId";
 const PALETTE_KEY = "p2p.look.palette";
@@ -293,8 +295,15 @@ async function startMic(): Promise<void> {
     if (ui.micFixedBpmEnabled.checked) {
       analyzer.setFixedBpm(Number(ui.micFixedBpmValue.value) || 126);
     }
-    micCapture.onBlock = (block) => analyzer.push(block.samples, block.time);
+    micCapture.onBlock = (block) => {
+      analyzer.push(block.samples, block.time);
+      // The same microphone drives deck following in Now Playing mode, where
+      // the question is not "what tempo is this" but "where in this known
+      // track are we".
+      deckFollower.push(block.samples);
+    };
     liveAnalyzer = analyzer;
+    void prepareDeckFollowing();
     await refreshMicDevices();
     setInputMode("mic");
   } catch (error) {
@@ -309,6 +318,7 @@ function stopMic(): void {
   micCapture.onBlock = null;
   micCapture.stop();
   liveAnalyzer = null;
+  deckFollower.stop();
   ui.micStatus.textContent = "Mic is idle.";
   updateTransportChrome();
 }
@@ -941,6 +951,9 @@ function currentBpm(): number {
   if (isMicMode() && liveAnalyzer) {
     return liveAnalyzer.currentBpm;
   }
+  if (liveAnalyzer && loaded && deckFollower.snapshot.state === "following") {
+    deckFollower.setLiveBpm(liveAnalyzer.currentBpm, loaded.show.song.tempo);
+  }
   return loaded?.show.song.tempo ?? 126;
 }
 
@@ -953,8 +966,14 @@ function currentPlaybackSeconds(): number | null {
   if (isBrowserAudioTransportSource(loadedSourceKind)) {
     return Number.isFinite(ui.audio.currentTime) ? ui.audio.currentTime : 0;
   }
-  // A Now Playing deck has no local transport, so the position is projected
-  // forward from the last observation the service reported.
+  // A Now Playing deck has no local transport. If the microphone can hear it,
+  // matching that against the analysed track beats the service's projection,
+  // which assumes the track plays start to finish and so cannot survive a
+  // loop, a cue jump or a scrub.
+  const follow = deckFollower.snapshot.follow;
+  if (deckFollower.following && follow !== null) {
+    return follow.positionSeconds;
+  }
   return resolveNowPlayingPlaybackSeconds(nowPlayingStatus, Date.now()) ?? 0;
 }
 
@@ -1266,6 +1285,37 @@ async function pollNowPlayingLoop(): Promise<void> {
   }
 }
 
+/** Tracks which track the deck follower currently holds a reference for. */
+let deckFollowerTrackKey: string | null = null;
+
+/**
+ * Points the deck follower at whatever Now Playing has armed.
+ *
+ * Only worth doing when the microphone is running and a Now Playing track is
+ * loaded: in Library mode the browser owns the transport and already knows the
+ * position exactly, and in Mic mode there is no known track to follow.
+ */
+async function prepareDeckFollowing(): Promise<void> {
+  const audioUrl = nowPlayingStatus?.preparedAudio?.audioUrl ?? null;
+  const tempo = loaded?.show.song.tempo ?? null;
+  if (
+    inputMode !== "now-playing" ||
+    loadedSourceKind !== "now-playing" ||
+    !micCapture.running ||
+    !audioUrl ||
+    !tempo
+  ) {
+    return;
+  }
+  const key = `${audioUrl}@${tempo}`;
+  if (key === deckFollowerTrackKey) {
+    return;
+  }
+  deckFollowerTrackKey = key;
+  await deckFollower.prepare({ audioUrl, tempo, micSampleRate: micCapture.sampleRate });
+  renderNowPlayingSurface();
+}
+
 function currentNowPlayingPlayback(): NowPlayingPlayback | null {
   if (
     inputMode !== "now-playing" ||
@@ -1398,6 +1448,7 @@ async function syncNowPlayingRuntime(): Promise<void> {
       freshnessKey: readyFreshnessKey
     });
     invalidateNowPlayingPreparedTrack();
+    void prepareDeckFollowing();
     renderNowPlayingSurface();
     return;
   }
@@ -1543,7 +1594,8 @@ function renderNowPlayingSurface(): void {
     preparedTrackId: nowPlayingPreparedTrack?.track.id ?? null,
     runtimeNote: nowPlayingRuntimeNote,
     loadingShowId: nowPlayingLoadingShowId,
-    preparingShowId: nowPlayingPreparingShowId
+    preparingShowId: nowPlayingPreparingShowId,
+    followerNote: describeFollower(deckFollower.snapshot)
   });
   ui.nowPlayingMeta.hidden = rows.length === 0;
   ui.nowPlayingMeta.replaceChildren(

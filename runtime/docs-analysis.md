@@ -100,3 +100,61 @@ the obvious first guess:
   In Key's 1-10 rating (r = 0.59), ahead of RMS (0.48). A busy hi-hat pattern
   reads as high energy at modest level. Refitting raised the correlation from
   0.50 to 0.64.
+
+## Following a deck through loops and cue jumps
+
+`src/audio/follower.ts` answers a different question from the rest of the
+analyser. Everything else asks "what is this audio doing"; the follower already
+knows the track and asks "where in it are we". That matters because a DJ
+application's reported position cannot answer it - rekordbox's is inferred from
+file read offsets, which never move backwards, so a four-bar loop leaves the
+show running on a timeline the deck has already left.
+
+The track's analysis becomes a reference print and the live signal is matched
+against it. Three design decisions carry the result.
+
+**Whitened bands plus onset deltas, not raw band energy.** Raw log-band
+energies correlate at around 0.75 between *any* two moments of a track, because
+every moment shares the same broad spectral tilt. Nothing is distinguishable at
+that level. Whitening each band by its own mean and spread across the track
+removes the shared shape; adding a half-wave-rectified temporal delta adds where
+the onsets are. This was measured, not assumed: before the change the match
+scored 0.76 at the true position and 0.75 everywhere else.
+
+**Best suffix, not fixed window.** A four-beat loop at 128 BPM is 1.9 s, shorter
+than the 2.2 s match window, so the window always straddles the loop seam and no
+full window ever matches cleanly. Scoring every suffix length and keeping the
+best - with a shrinkage term so short suffixes cannot win on luck - is what
+makes short loops detectable at all.
+
+**Live self-similarity, not reference matching, for loops.** Matching against
+the reference cannot separate a loop from the arrangement repeating, and in
+four-to-the-floor music the arrangement repeats constantly. A looping deck
+replays the same samples, so the live signal correlates with its own recent past
+far more strongly. `npm run bench:loopsep` measures how far that separates over
+24 tracks: median 0.978 while looping against 0.791 while merely playing, with
+overlapping tails.
+
+| threshold | loop recall | false positives |
+| --- | --- | --- |
+| 0.86 | 95.0% | 32.1% |
+| 0.90 | 85.5% | 20.1% |
+| 0.94 | 76.9% | 9.3% |
+
+0.86 with two-column confirmation and a discount for repetition the reference
+already has ended up best end to end. Forcing a wrap every loop length whether
+or not the reference agreed was also tried, and measured worse: three points of
+recall for nine times the spurious reports, because a loop that has been
+released keeps wrapping until it is noticed.
+
+Results over 40 tracks replayed as simulated performances
+(`npm run bench:follow`): median position error 27 ms, within 100 ms 77.8% of
+the time, all cue jumps detected, 53.5% of loops detected with the length right
+94% of the time, four spurious loops in total, 1.1 s latency.
+
+Two bugs found here were worth the benchmark on their own. Reported positions
+were systematically 60 ms early because column indices were treated as times,
+ignoring that a spectral frame is timed at its centre - most of a 100 ms
+accuracy budget spent on an off-by-one. And every jump was reported four times
+over, because the status returned between columns still carried the last one;
+that alone accounted for three quarters of what looked like spurious detections.

@@ -11,6 +11,8 @@ export interface BuildNowPlayingMetaRowsInput {
   runtimeNote: string | null;
   loadingShowId: string | null;
   preparingShowId: string | null;
+  /** What the deck follower is doing, when the microphone is on it. */
+  followerNote?: string | null;
 }
 
 export function resolveVisualOwnership(input: {
@@ -48,6 +50,12 @@ export function buildNowPlayingMetaRows(input: BuildNowPlayingMetaRowsInput): st
   const analyzer = input.status?.analyzer;
   if (analyzer && analyzer !== "analyser ready.") {
     rows.push(analyzer);
+  }
+
+  // Deck following changes where the position comes from, so it belongs above
+  // the audio-provider line rather than buried under it.
+  if (input.followerNote) {
+    rows.push(input.followerNote);
   }
 
   if (input.status?.preparedAudio && input.outputMode !== "premade_active") {
