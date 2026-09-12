@@ -1,0 +1,34 @@
+{
+  "name": "@phrase2photon/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Code-native Phrase-to-Photon graphics runtime proof of concept.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
+    "e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bench:build": "tsc -p tsconfig.bench.json",
+    "bench:mik": "npm run bench:build && node .analysis-cache/build/scripts/analysis/mikBenchmark.js",
+    "bench:phase": "npm run bench:build && node .analysis-cache/build/scripts/analysis/phaseStudy.js",
+    "bench:grid": "npm run bench:build && node .analysis-cache/build/scripts/analysis/gridStudy.js",
+    "bench:track": "npm run bench:build && node .analysis-cache/build/scripts/analysis/beatDiag.js",
+    "bench:live": "npm run bench:build && node .analysis-cache/build/scripts/analysis/liveBenchmark.js",
+    "bench:energy": "npm run bench:build && node .analysis-cache/build/scripts/analysis/energyStudy.js",
+    "render:scene-demo": "node ./scripts/renderSceneDemo.mjs"
+  },
+  "dependencies": {
+    "three": "^0.176.0",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^22.14.1",
+    "@types/three": "^0.184.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.3.2",
+    "vitest": "^3.1.2"
+  }
+}

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=app-config.sh
+source "$script_dir/app-config.sh"
+
+npm_bin="${LOCAL_APP_NPM_BIN:-}"
+uv_bin="${LOCAL_APP_UV_BIN:-}"
+if [[ -z "$npm_bin" ]]; then
+  if command -v npm >/dev/null 2>&1; then
+    npm_bin="$(command -v npm)"
+  else
+    for candidate in /opt/homebrew/bin/npm /usr/local/bin/npm; do
+      if [[ -x "$candidate" ]]; then
+        npm_bin="$candidate"
+        break
+      fi
+    done
+  fi
+fi
+
+if [[ -z "$npm_bin" ]]; then
+  echo "Phrase2Photon local app requires npm on PATH or LOCAL_APP_NPM_BIN" >&2
+  exit 1
+fi
+
+if [[ -z "$uv_bin" ]]; then
+  if command -v uv >/dev/null 2>&1; then
+    uv_bin="$(command -v uv)"
+  else
+    for candidate in /opt/homebrew/bin/uv /usr/local/bin/uv; do
+      if [[ -x "$candidate" ]]; then
+        uv_bin="$candidate"
+        break
+      fi
+    done
+  fi
+fi
+
+if [[ -z "$uv_bin" ]]; then
+  echo "Phrase2Photon local app requires uv on PATH or LOCAL_APP_UV_BIN" >&2
+  exit 1
+fi
+
+npm_dir="$(dirname "$npm_bin")"
+case ":$PATH:" in
+  *":$npm_dir:"*) ;;
+  *) export PATH="$npm_dir:$PATH" ;;
+esac
+
+uv_dir="$(dirname "$uv_bin")"
+case ":$PATH:" in
+  *":$uv_dir:"*) ;;
+  *) export PATH="$uv_dir:$PATH" ;;
+esac
+
+backend_pid=""
+runtime_pid=""
+
+cleanup() {
+  local exit_code="${1:-0}"
+  trap - EXIT INT TERM
+
+  if [[ -n "$runtime_pid" ]]; then
+    kill "$runtime_pid" 2>/dev/null || true
+    wait "$runtime_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$backend_pid" ]]; then
+    kill "$backend_pid" 2>/dev/null || true
+    wait "$backend_pid" 2>/dev/null || true
+  fi
+
+  exit "$exit_code"
+}
+
+trap 'cleanup $?' EXIT
+trap 'cleanup 130' INT TERM
+
+wait_for_now_playing_backend() {
+  if [[ "${LOCAL_APP_SKIP_NOW_PLAYING_WAIT:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  local status_url="${LOCAL_APP_NOW_PLAYING_STATUS_URL:-$NOW_PLAYING_STATUS_URL}"
+  for _ in $(seq 1 60); do
+    if curl -fsS "$status_url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+cd "$LOCAL_APP_REPO_ROOT"
+"$uv_bin" run phrase2photon now-playing-serve \
+  --host "${LOCAL_APP_NOW_PLAYING_HOST:-$NOW_PLAYING_SERVICE_HOST}" \
+  --port "${LOCAL_APP_NOW_PLAYING_PORT:-$NOW_PLAYING_SERVICE_PORT}" &
+backend_pid=$!
+
+if ! wait_for_now_playing_backend; then
+  echo "Phrase2Photon local app failed to start the Now Playing backend." >&2
+  cleanup 1
+fi
+
+cd "$LOCAL_APP_REPO_ROOT/runtime"
+"$npm_bin" run dev -- --host 127.0.0.1 --port 5181 --strictPort &
+runtime_pid=$!
+
+while true; do
+  if ! kill -0 "$backend_pid" 2>/dev/null; then
+    set +e
+    wait "$backend_pid"
+    exit_code=$?
+    set -e
+    cleanup "$exit_code"
+  fi
+  if ! kill -0 "$runtime_pid" 2>/dev/null; then
+    set +e
+    wait "$runtime_pid"
+    exit_code=$?
+    set -e
+    cleanup "$exit_code"
+  fi
+  sleep 0.5
+done

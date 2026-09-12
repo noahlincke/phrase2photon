@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=app-config.sh
+source "$script_dir/app-config.sh"
+
+log_root="${LOCAL_APP_LOG_ROOT:-$HOME/Library/Logs/local-web-apps}"
+cache_root="${LOCAL_APP_CACHE_ROOT:-$HOME/Library/Caches/local-web-apps}"
+run_server="${LOCAL_APP_RUN_SERVER:-$script_dir/run-server}"
+log_file="$log_root/$APP_SLUG.log"
+pid_file="$cache_root/$APP_SLUG.pid"
+
+mkdir -p "$log_root" "$cache_root"
+
+healthcheck() {
+  curl -fsS "$APP_URL" >/dev/null 2>&1
+}
+
+kill_pid() {
+  local pid="$1"
+
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+stop_existing_server() {
+  local pid=""
+  local port=""
+
+  if [[ -f "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    rm -f "$pid_file"
+    kill_pid "$pid"
+  fi
+
+  for port in "$APP_PORT" "${NOW_PLAYING_SERVICE_PORT:-}"; do
+    if [[ -z "$port" ]]; then
+      continue
+    fi
+    while read -r listener_pid; do
+      if [[ -z "$listener_pid" ]] || [[ "$listener_pid" == "$pid" ]]; then
+        continue
+      fi
+      kill_pid "$listener_pid"
+    done < <(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+  done
+}
+
+wait_for_ready() {
+  for _ in $(seq 1 60); do
+    if healthcheck; then
+      return 0
+    fi
+    sleep 0.5
+  done
+
+  return 1
+}
+
+open_url() {
+  open "$APP_URL"
+  printf '%s\n' "$APP_URL"
+}
+
+stop_existing_server
+
+printf '\n[%s] Starting %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$APP_NAME" >> "$log_file"
+nohup "$run_server" >> "$log_file" 2>&1 < /dev/null &
+server_pid=$!
+disown "$server_pid" 2>/dev/null || true
+echo "$server_pid" > "$pid_file"
+
+if wait_for_ready; then
+  open_url
+  exit 0
+fi
+
+echo "$APP_NAME failed to start. Log: $log_file" >&2
+open "$log_file" >/dev/null 2>&1 || true
+exit 1

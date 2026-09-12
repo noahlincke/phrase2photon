@@ -1,0 +1,35 @@
+# Build output and environments
+.venv/
+.venv_clean/
+.venv*/
+build/
+dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+node_modules/
+runtime/node_modules/
+runtime/dist/
+runtime/coverage/
+runtime/test-results/
+runtime/playwright-report/
+.DS_Store
+
+# Local machine state
+runtime_shows/
+runtime/library.local.json
+runtime/.analysis-cache/
+.superpowers/
+
+# Third-party content that is not ours to redistribute.
+#
+# FB4 cue thumbnails are extracted from Pangolin's FB4 Beam Content Pack PDF.
+# Anyone with an FB4 has the pack and can regenerate them locally:
+#   node --experimental-strip-types scripts/generateFb4CueCatalog.ts
+# The cue catalogue works without them; it simply shows no preview image.
+runtime/public/fb4-thumbnails/*.png
+runtime/public/fb4-thumbnails/*.svg
+
+# Rendered scene footage. Large, regenerable with `npm run render:scene-demo`,
+# and quickly stale whenever the scenes change.
+runtime/rendered-demos/

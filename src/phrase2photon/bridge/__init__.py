@@ -1,0 +1,1 @@
+"""Producer Pal adapter package."""

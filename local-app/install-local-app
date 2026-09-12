@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=app-config.sh
+source "$script_dir/app-config.sh"
+
+apps_root="${1:-$HOME/Applications}"
+target_app="$apps_root/$APP_NAME.app"
+launcher_path="$script_dir/open-local-app"
+
+mkdir -p "$apps_root"
+rm -rf "$target_app"
+
+escaped_launcher="${launcher_path//\\/\\\\}"
+escaped_launcher="${escaped_launcher//\"/\\\"}"
+
+osacompile \
+  -o "$target_app" \
+  -e "set launcher to quoted form of \"$escaped_launcher\"" \
+  -e "do shell script launcher"
+
+printf '%s\n' "$target_app"

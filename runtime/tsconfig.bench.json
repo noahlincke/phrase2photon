@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "outDir": ".analysis-cache/build",
+    "noEmit": false
+  },
+  "include": ["src/audio/**/*.ts", "src/show/**/*.ts", "scripts/analysis/**/*.ts"]
+}

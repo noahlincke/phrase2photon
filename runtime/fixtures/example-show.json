@@ -1,0 +1,240 @@
+{
+  "version": "0.1.0",
+  "song": {
+    "song_id": "song_demo_001",
+    "title": "Example Song",
+    "artist": "Phrase2Photon",
+    "tempo": 128.0,
+    "time_signature": "4/4"
+  },
+  "phrases": [
+    {
+      "phrase_id": "phrase_intro",
+      "name": "Intro",
+      "range": {
+        "start_bar_beat": "1|1",
+        "end_bar_beat": "17|1",
+        "start_locator_id": "loc_intro",
+        "end_locator_id": "loc_drop_a"
+      },
+      "locators": [
+        {
+          "locator_id": "loc_intro",
+          "name": "Intro",
+          "bar_beat": "1|1",
+          "seconds": null
+        }
+      ],
+      "track_features": [
+        {
+          "track_id": "track_pad",
+          "name": "Pads",
+          "role": "texture",
+          "activity": 0.4,
+          "density": 0.2
+        },
+        {
+          "track_id": "track_vox",
+          "name": "Lead Vox",
+          "role": "lead",
+          "activity": 0.7,
+          "density": 0.5
+        }
+      ],
+      "energy": {
+        "level": "mid",
+        "dynamics": 0.4,
+        "tension": 0.6
+      },
+      "visual_look": {
+        "palette": "amber-cyan",
+        "motion_style": "slow_parallax",
+        "composition": "center-weighted",
+        "notes": [
+          "hold contrast low until the first drop"
+        ]
+      },
+      "transition_in": null,
+      "transition_out": {
+        "type": "fade",
+        "duration_beats": 4.0,
+        "notes": "open into the drop"
+      }
+    },
+    {
+      "phrase_id": "phrase_drop_a",
+      "name": "Drop A",
+      "range": {
+        "start_bar_beat": "17|1",
+        "end_bar_beat": "33|1",
+        "start_locator_id": "loc_drop_a",
+        "end_locator_id": null
+      },
+      "locators": [
+        {
+          "locator_id": "loc_drop_a",
+          "name": "Drop A",
+          "bar_beat": "17|1",
+          "seconds": null
+        }
+      ],
+      "track_features": [
+        {
+          "track_id": "track_drums",
+          "name": "Drums",
+          "role": "rhythm",
+          "activity": 1.0,
+          "density": 0.9
+        },
+        {
+          "track_id": "track_bass",
+          "name": "Bass",
+          "role": "low-end",
+          "activity": 0.95,
+          "density": 0.8
+        }
+      ],
+      "energy": {
+        "level": "peak",
+        "dynamics": 0.85,
+        "tension": 0.3
+      },
+      "visual_look": {
+        "palette": "acid-white",
+        "motion_style": "hard_cuts",
+        "composition": "full-frame",
+        "notes": [
+          "favor beat-locked bursts over smooth interpolation"
+        ]
+      },
+      "transition_in": {
+        "type": "strobe-hit",
+        "duration_beats": 1.0,
+        "notes": null
+      },
+      "transition_out": null
+    }
+  ],
+  "preset_catalog": [
+    {
+      "preset_id": "calm-prism-chamber",
+      "name": "Calm Prism Chamber",
+      "family": "texture-atmosphere",
+      "mode_support": [
+        "deterministic",
+        "live-rotation"
+      ],
+      "phrase_tags": [
+        "intro",
+        "groove"
+      ],
+      "energy_tags": [
+        "low",
+        "mid"
+      ],
+      "style_tags": [
+        "texture",
+        "calm"
+      ],
+      "palette_key": "amber-cyan",
+      "engine": "shader-plane",
+      "thumbnail_url": null,
+      "clip_source": null,
+      "notes": [
+        "slow chamber drift with restrained refracted motion"
+      ]
+    },
+    {
+      "preset_id": "drop-lattice-strike",
+      "name": "Drop Lattice Strike",
+      "family": "cyber-psychedelic",
+      "mode_support": [
+        "deterministic",
+        "live-rotation"
+      ],
+      "phrase_tags": [
+        "drop",
+        "build"
+      ],
+      "energy_tags": [
+        "high",
+        "peak"
+      ],
+      "style_tags": [
+        "cyber-psychedelic",
+        "percussive"
+      ],
+      "palette_key": "acid-white",
+      "engine": "cyber-lattice",
+      "thumbnail_url": null,
+      "clip_source": null,
+      "notes": [
+        "hard-edged rotating lattice for peak sections"
+      ]
+    }
+  ],
+  "phrase_visual_assignments": [
+    {
+      "phrase_id": "phrase_intro",
+      "preset_id": "calm-prism-chamber",
+      "locked": true,
+      "palette_override": null,
+      "parameter_overrides": {}
+    },
+    {
+      "phrase_id": "phrase_drop_a",
+      "preset_id": "drop-lattice-strike",
+      "locked": true,
+      "palette_override": null,
+      "parameter_overrides": {}
+    }
+  ],
+  "lighting_cues": [
+    {
+      "cue_id": "lx_intro_wash",
+      "phrase_id": "phrase_intro",
+      "fixture_group": "wash_all",
+      "look": {
+        "palette": "amber-cyan",
+        "intensity": 0.35,
+        "movement": "slow_sweep",
+        "strobe": false
+      },
+      "priority": 0
+    },
+    {
+      "cue_id": "lx_drop_a_hit",
+      "phrase_id": "phrase_drop_a",
+      "fixture_group": "spots_front",
+      "look": {
+        "palette": "white-acid",
+        "intensity": 0.95,
+        "movement": "beat_chase",
+        "strobe": true
+      },
+      "priority": 10
+    }
+  ],
+  "dmx_laser_cues": [
+    {
+      "cue_id": "laser_drop_a",
+      "phrase_id": "phrase_drop_a",
+      "fixture_group": "laser_main",
+      "mode": "fan_sweep",
+      "parameter_overrides": {
+        "scan_speed": 180,
+        "pattern": "burst_fan",
+        "color_macro": "white_green"
+      }
+    }
+  ],
+  "manual_overrides": [
+    {
+      "target_type": "phrase",
+      "target_id": "phrase_drop_a",
+      "payload": {
+        "notes": "operator prefers slightly reduced laser speed in small rooms"
+      }
+    }
+  ]
+}
