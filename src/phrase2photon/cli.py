@@ -107,6 +107,22 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host for the local service.")
     serve_parser.add_argument("--port", type=int, default=8768, help="Bind port for the local service.")
 
+    prepare_parser = subparsers.add_parser(
+        "prepare-shows",
+        help="Compile and validate Now Playing shows ahead of time for a list of audio files.",
+    )
+    prepare_parser.add_argument(
+        "--paths-file",
+        required=True,
+        help='JSON list of entries with "path" (absolute) and optional "title", "artist", "version", "label".',
+    )
+    prepare_parser.add_argument("--report", help="Write the per-entry report JSON to a file.")
+    prepare_parser.add_argument("--force", action="store_true", help="Rebuild shows even if they are already cached.")
+    prepare_parser.add_argument(
+        "--cache-root",
+        help="Override the Now Playing cache root (defaults to ~/Phrase2PhotonShows/now-playing/tracks).",
+    )
+
     return parser
 
 
@@ -157,6 +173,20 @@ def main() -> None:
         from phrase2photon.now_playing.server import run_server
 
         run_server(host=args.host, port=args.port)
+        return
+
+    if args.command == "prepare-shows":
+        from phrase2photon.now_playing.prepare import prepare_show_entry
+
+        entries = json.loads(Path(args.paths_file).read_text(encoding="utf-8"))
+        cache_root = Path(args.cache_root).expanduser() if args.cache_root else None
+        rows = [prepare_show_entry(entry, force=args.force, cache_root=cache_root) for entry in entries]
+        if args.report:
+            _write_output(args.report, json.dumps(rows, indent=2))
+        ready = sum(1 for row in rows if row["status"] == "ok")
+        failed = [str(row["label"]) for row in rows if row["status"] != "ok"]
+        suffix = f" (failed: {', '.join(failed)})" if failed else ""
+        print(f"prepare-shows: {ready}/{len(rows)} shows ready{suffix}")
         return
 
     parser.error(f"Unknown command: {args.command}")

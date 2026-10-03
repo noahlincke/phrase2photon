@@ -517,6 +517,9 @@ def _matches_exact_disk_source_hint(observation: TrackObservation, candidate: Pr
 # Used only when the runtime analyser is unavailable. Any fixed tempo is
 # wrong for most tracks; this keeps Now Playing running rather than correct.
 FALLBACK_TEMPO = 124.0
+# Written next to the compiled show when the fallback above produced it, so
+# ahead-of-time preparation can tell a measured show from a guessed one.
+FALLBACK_ANALYSIS_MARKER = "fallback-analysis"
 
 
 def show_dir_for_identity(audio_identity: str, *, cache_root: Path | None = None) -> Path:
@@ -528,9 +531,12 @@ def ensure_compiled_show(
     resolved: ResolvedNowPlayingTrack,
     *,
     cache_root: Path | None = None,
+    force: bool = False,
 ) -> Path:
     show_dir = show_dir_for_identity(resolved.audio_identity, cache_root=cache_root)
     cache_dir = show_dir.parent
+    if force:
+        shutil.rmtree(cache_dir, ignore_errors=True)
     cached_audio = _ensure_cached_audio(resolved, cache_root=cache_root)
     show_json = show_dir / "show.json"
     if show_json.exists():
@@ -561,6 +567,8 @@ def ensure_compiled_show(
         downbeat_seconds=downbeat_seconds,
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if analysis is None:
+        (cache_dir / FALLBACK_ANALYSIS_MARKER).write_text(f"tempo={FALLBACK_TEMPO}\n", encoding="utf-8")
     extraction_path = cache_dir / "wav-analysis.extraction.json"
     extraction_path.write_text(extraction.model_dump_json(indent=2) + "\n", encoding="utf-8")
     subprocess.run(
