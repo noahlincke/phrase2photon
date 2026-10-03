@@ -256,3 +256,53 @@ describe("laser looks", () => {
     expect(latencyShiftedBeats(10, 0, 120)).toBe(10);
   });
 });
+
+describe("mid-phrase entry", () => {
+  it("hits solid when the drop is entered a fraction of a beat in", () => {
+    const hit = looked("drop", { beatsIntoPhrase: 0.2, beatPhase: 0.2, beatInBar: 1 });
+    expect(hit.channels[4]).toBe(255);
+    expect(hit.channels[6]).toBe(255);
+  });
+
+  it("chops, not solid, when the drop is entered past the first beat", () => {
+    // Still inside the burst bar, so entry at 1.5 lands on the sixteenth chop
+    // grid instead of the solid downbeat: on at 1.5, off at 1.75.
+    const on = looked("drop", { beatsIntoPhrase: 1.5, beatPhase: 0.5, beatInBar: 1 });
+    expect(on.channels[4]).toBe(255);
+    const off = looked("drop", { beatsIntoPhrase: 1.75, beatPhase: 0.75, beatInBar: 1 });
+    expect(off.channels[4]).toBe(0);
+  });
+
+  it("skips the hit entirely when the drop is entered past the burst bar", () => {
+    const after = looked("drop", { beatsIntoPhrase: 5, beatPhase: 0, beatInBar: 2 });
+    // No retroactive strobe: size stays at the phrase frame's own, not the hit's 255.
+    expect(after.channels[6]).toBe(baseFrame("drop", 0).channels[6]);
+  });
+
+  it("resumes a build ramp at the entry position", () => {
+    // Entered halfway through a 32-beat build: ramp progress 0.5.
+    const build = looked("build", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
+    expect(build.channels[6]).toBe(204);
+
+    // A breakdown's eight-bar pre-drop ramp resumes halfway too: 16 of 32 ramp beats.
+    const breakdown = looked("breakdown", {
+      nextPhraseKind: "drop",
+      beatsInPhrase: 64,
+      beatsIntoPhrase: 48,
+      beatPhase: 0,
+      beatInBar: 1
+    });
+    expect(breakdown.channels[6]).toBe(204);
+  });
+
+  it("dips dark when a show is entered just before its drop", () => {
+    const dip = looked("build", {
+      nextPhraseKind: "drop",
+      beatsInPhrase: 32,
+      beatsIntoPhrase: 31.5,
+      beatPhase: 0.5,
+      beatInBar: 4
+    });
+    expect(dip.channels[4]).toBe(0);
+  });
+});
