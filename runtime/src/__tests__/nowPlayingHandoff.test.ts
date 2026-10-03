@@ -1,6 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { applyNowPlayingStatus, createNowPlayingSession } from "../nowPlaying/handoff.js";
+import {
+  applyNowPlayingStatus,
+  createNowPlayingSession,
+  preparedAudioForShow
+} from "../nowPlaying/handoff.js";
+import type { NowPlayingStatus } from "../nowPlaying/types.js";
+
+function statusWithShow(id: string): NowPlayingStatus {
+  return {
+    modeState: "premade_armed",
+    observation: null,
+    activeShowId: null,
+    armedShow: { id, showUrl: `/api/now-playing/show/${id}` },
+    preparedAudio: {
+      path: `/tmp/${id}.wav`,
+      audioUrl: `/api/now-playing/audio/${id}`,
+      durationSeconds: 212,
+      provider: "disk"
+    },
+    preparing: null,
+    providerAttempts: []
+  };
+}
 
 describe("Now Playing handoff", () => {
   it("switches immediately from reactive fallback when a show is ready", () => {
@@ -233,5 +255,16 @@ describe("Now Playing handoff", () => {
     });
 
     expect(next).toEqual(session);
+  });
+
+  it("pairs prepared audio only with the show it was armed for", () => {
+    // A new track arms while the previous show is still loaded: its audio
+    // must not be paired with the loaded show's tempo mid-handover.
+    expect(preparedAudioForShow(statusWithShow("track-b"), "track-a")).toBeNull();
+    expect(preparedAudioForShow(statusWithShow("track-a"), "track-a")?.audioUrl).toBe(
+      "/api/now-playing/audio/track-a"
+    );
+    expect(preparedAudioForShow(null, "track-a")).toBeNull();
+    expect(preparedAudioForShow(statusWithShow("track-a"), null)).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import type { NowPlayingModeState, NowPlayingStatus } from "./types.js";
+import type { NowPlayingModeState, NowPlayingPreparedAudio, NowPlayingStatus } from "./types.js";
 
 export interface NowPlayingSession {
   outputMode: NowPlayingModeState;
@@ -29,6 +29,22 @@ export function createNowPlayingSession(
     pendingShowId: init.pendingShowId ?? null,
     latestObservedAt: init.latestObservedAt ?? null
   };
+}
+
+/**
+ * The status's prepared audio, but only when it belongs to the given show.
+ *
+ * The server emits prepared audio keyed on the armed show, so a track that
+ * arms while another show is still loaded hands back null instead of the next
+ * track's audio — the caller must not pair it with the loaded show's tempo.
+ */
+export function preparedAudioForShow(
+  status: NowPlayingStatus | null,
+  showId: string | null
+): NowPlayingPreparedAudio | null {
+  return status !== null && status.armedShow !== null && status.armedShow.id === showId
+    ? status.preparedAudio
+    : null;
 }
 
 export function applyNowPlayingStatus(
