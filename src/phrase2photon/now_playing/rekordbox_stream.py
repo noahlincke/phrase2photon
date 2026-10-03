@@ -81,12 +81,14 @@ class DeckMotion:
 
     ``last_motion_at`` is when the position last changed and ``playing_since``
     is when the current playing streak began; both stay None until the deck
-    shows a second, different reading.
+    shows real playback. ``last_position``/``last_seen_at`` record the latest
+    reading and when it was observed.
     """
 
     last_motion_at: float | None
     playing_since: float | None
     last_position: int | None
+    last_seen_at: float | None
 
 
 def _advanced_deck_motion(
@@ -94,14 +96,17 @@ def _advanced_deck_motion(
 ) -> DeckMotion:
     """Fold one stream tick into a deck's motion record.
 
-    Any position change counts as motion, so loop wraps and hot-cue jumps
-    keep a deck playing while a frozen playhead ages toward stopped. A first
-    sighting carries no motion evidence, so a freshly loaded paused deck is
-    not mistaken for a playing one; an unreadable tick leaves the record as
-    it is so one missed reading cannot erase in-progress motion.
+    While a deck is playing, any position change counts as motion, so loop
+    wraps and hot-cue jumps keep it playing. On a stopped deck only forward
+    motion at roughly real-time speed starts a streak: track loads and cue
+    or seek jumps just re-record the position. A first sighting carries no
+    motion evidence, and an unreadable tick leaves the record as it is so
+    one missed reading cannot erase in-progress motion.
     """
     if motion is None:
-        motion = DeckMotion(last_motion_at=None, playing_since=None, last_position=None)
+        motion = DeckMotion(
+            last_motion_at=None, playing_since=None, last_position=None, last_seen_at=None
+        )
     if sample is None:
         return motion
     if motion.last_position is None or sample == motion.last_position:
@@ -109,14 +114,30 @@ def _advanced_deck_motion(
             last_motion_at=motion.last_motion_at,
             playing_since=motion.playing_since,
             last_position=sample,
+            last_seen_at=now,
         )
-    was_stopped = (
-        motion.last_motion_at is None or now - motion.last_motion_at >= STOPPED_AFTER_SECONDS
+    playing = (
+        motion.last_motion_at is not None
+        and now - motion.last_motion_at < STOPPED_AFTER_SECONDS
     )
+    if playing:
+        return DeckMotion(
+            last_motion_at=now,
+            playing_since=motion.playing_since,
+            last_position=sample,
+            last_seen_at=now,
+        )
+    assert motion.last_seen_at is not None  # a recorded position is always stamped
+    seconds = (sample - motion.last_position) / REKORDBOX_MEMORY_SAMPLE_RATE_HZ
+    if not 0 < seconds <= now - motion.last_seen_at + 0.15:
+        return DeckMotion(
+            last_motion_at=motion.last_motion_at,
+            playing_since=motion.playing_since,
+            last_position=sample,
+            last_seen_at=now,
+        )
     return DeckMotion(
-        last_motion_at=now,
-        playing_since=now if was_stopped else motion.playing_since,
-        last_position=sample,
+        last_motion_at=now, playing_since=now, last_position=sample, last_seen_at=now
     )
 
 

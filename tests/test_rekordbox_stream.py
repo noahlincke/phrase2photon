@@ -406,20 +406,65 @@ def test_sticky_master_deck_still_wins() -> None:
 
 def test_select_playing_deck_switches_to_longest_playing() -> None:
     stopped = rekordbox_stream.DeckMotion(
-        last_motion_at=1.0, playing_since=0.5, last_position=100
+        last_motion_at=1.0, playing_since=0.5, last_position=100, last_seen_at=1.0
     )
     playing = rekordbox_stream.DeckMotion(
-        last_motion_at=2.4, playing_since=1.0, last_position=200
+        last_motion_at=2.4, playing_since=1.0, last_position=200, last_seen_at=2.4
     )
     assert rekordbox_stream._select_playing_deck(2.4, 1, [stopped, playing]) == 2
     assert rekordbox_stream._select_playing_deck(2.4, None, [stopped, playing]) == 2
     tied_a = rekordbox_stream.DeckMotion(
-        last_motion_at=2.4, playing_since=1.5, last_position=100
+        last_motion_at=2.4, playing_since=1.5, last_position=100, last_seen_at=2.4
     )
     tied_b = rekordbox_stream.DeckMotion(
-        last_motion_at=2.4, playing_since=1.5, last_position=200
+        last_motion_at=2.4, playing_since=1.5, last_position=200, last_seen_at=2.4
     )
     assert rekordbox_stream._select_playing_deck(2.4, None, [tied_a, tied_b]) == 1
+
+
+def test_sticky_track_load_on_paused_deck_does_not_switch() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    for step in range(10):  # deck 1 plays, then pauses as the on-air deck
+        _play_tick(stream, clock, d1=f"{step * 2205},128.000")
+    for step in range(10, 20):  # deck 1 paused; nothing else is playing
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+    # Deck 2 sits paused on an old track, then the DJ loads a new one at 0.
+    _play_tick(stream, clock, d2="9000000,128.000")
+    for _ in range(4):
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000", d2="0,128.000")
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_sticky_seeks_on_paused_deck_do_not_switch() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    for step in range(10):
+        _play_tick(stream, clock, d1=f"{step * 2205},128.000")
+    for step in range(10, 16):
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+    # Deck 2 is paused and the DJ scrubs it: a 30 s jump forward, then 10 s back.
+    _play_tick(stream, clock, d2="0,128.000")
+    _play_tick(stream, clock, d1=f"{9 * 2205},128.000", d2="1323000,128.000")
+    for _ in range(3):
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000", d2="1323000,128.000")
+    _play_tick(stream, clock, d1=f"{9 * 2205},128.000", d2="882000,128.000")
+    for _ in range(6):
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000", d2="882000,128.000")
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_sticky_playback_on_paused_deck_switches() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    for step in range(10):
+        _play_tick(stream, clock, d1=f"{step * 2205},128.000")
+    for step in range(10, 16):
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+    # Deck 2 starts real playback: real-time forward motion hands over fast.
+    for step in range(20):
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000", d2=f"{step * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 2
 
 
 def test_clock_payload_playing_and_age() -> None:
