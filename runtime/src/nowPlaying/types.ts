@@ -83,3 +83,21 @@ export interface NowPlayingStatus {
   /** One line on whether measured tempo is available; see track_analysis.py. */
   analyzer?: string | null;
 }
+
+/**
+ * One live sample of the Rekordbox master deck playhead from /api/now-playing/clock.
+ *
+ * positionSeconds is the raw sample position at sampling time; ageMs says how
+ * long ago that was, so a playing deck has already moved positionSeconds +
+ * ageMs/1000 by the time the payload arrives.
+ */
+export interface NowPlayingClockSample {
+  status: string;
+  deck: number | null;
+  positionSeconds: number | null;
+  playing: boolean | null;
+  bpm: number | null;
+  title: string | null;
+  artist: string | null;
+  ageMs: number | null;
+}

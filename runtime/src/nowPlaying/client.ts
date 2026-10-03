@@ -1,4 +1,4 @@
-import type { NowPlayingObservation, NowPlayingStatus } from "./types.js";
+import type { NowPlayingClockSample, NowPlayingObservation, NowPlayingStatus } from "./types.js";
 
 export async function fetchNowPlayingStatus(
   fetchImpl = fetch
@@ -9,6 +9,34 @@ export async function fetchNowPlayingStatus(
   }
 
   return validateNowPlayingStatus(await response.json());
+}
+
+export async function fetchNowPlayingClock(
+  fetchImpl = fetch
+): Promise<NowPlayingClockSample> {
+  const response = await fetchImpl("/api/now-playing/clock");
+  if (!response.ok) {
+    throw new Error(`Now Playing clock failed: ${response.status}`);
+  }
+
+  return validateNowPlayingClock(await response.json());
+}
+
+function validateNowPlayingClock(payload: unknown): NowPlayingClockSample {
+  if (!isRecord(payload)) {
+    throw new Error("Invalid Now Playing clock: expected object payload");
+  }
+
+  return {
+    status: typeof payload.status === "string" ? payload.status : "",
+    deck: readNumber(payload, "deck", "deck"),
+    positionSeconds: readNumber(payload, "positionSeconds", "position_seconds"),
+    playing: readBoolean(payload, "playing", "playing"),
+    bpm: readNumber(payload, "bpm", "bpm"),
+    title: readString(payload, "title", "title"),
+    artist: readString(payload, "artist", "artist"),
+    ageMs: readNumber(payload, "ageMs", "age_ms")
+  };
 }
 
 function validateNowPlayingStatus(payload: unknown): NowPlayingStatus {

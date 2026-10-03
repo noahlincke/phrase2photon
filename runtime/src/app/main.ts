@@ -35,7 +35,13 @@ import {
 } from "../dmx/fb4Dmx16.js";
 import { applyLaserLook, latencyShiftedBeats, phraseKindFor, type LaserLookContext } from "../dmx/laserLooks.js";
 import type { PublicLibraryTrack } from "../library/types.js";
-import { fetchNowPlayingStatus } from "../nowPlaying/client.js";
+import { fetchNowPlayingClock, fetchNowPlayingStatus } from "../nowPlaying/client.js";
+import {
+  anchorFromClockSample,
+  clockSampleIsExact,
+  projectClockAnchor,
+  type ClockSampleAnchor
+} from "../nowPlaying/exactClock.js";
 import {
   applyNowPlayingStatus,
   createNowPlayingSession,
@@ -214,6 +220,9 @@ let nowPlayingLastObservation: NowPlayingStatus["observation"] | null = null;
 let nowPlayingPollTimer: number | null = null;
 let nowPlayingPollRequested = false;
 let nowPlayingPollInFlight = false;
+let nowPlayingClockAnchor: ClockSampleAnchor | null = null;
+let nowPlayingClockInFlight = false;
+let nowPlayingClockTimer: number | null = null;
 let cachedTrackRefreshKey: string | null = null;
 const nowPlayingPreloadAudio = new Audio();
 nowPlayingPreloadAudio.preload = "metadata";
@@ -1104,6 +1113,9 @@ function currentPlaybackSeconds(): number | null {
   //      pile of signal processing but works for any source.
   //   3. Projecting the source app's estimate forward, which assumes the track
   //      plays start to finish and so breaks on the first loop or cue jump.
+  if (inputMode === "now-playing" && nowPlayingClockAnchor) {
+    return projectClockAnchor(nowPlayingClockAnchor, Date.now());
+  }
   if (nowPlayingClockIsExact(nowPlayingClockStatus())) {
     return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now()) ?? 0;
   }
@@ -1140,6 +1152,7 @@ async function boot(): Promise<void> {
   setInputMode(restoredInputMode());
   await refreshMicDevices();
   startNowPlayingPolling();
+  void pollNowPlayingClockLoop();
 
   try {
     const response = await fetch("/api/library");
@@ -1433,6 +1446,33 @@ async function pollNowPlayingLoop(): Promise<void> {
       void pollNowPlayingLoop();
     }, delay);
   }
+}
+
+// The 1.2 s status poll is too slow to catch a hot-cue jump: between polls the
+// browser would keep projecting a playhead the deck has already left. This
+// fast loop re-anchors the transport clock on every exact deck sample instead;
+// anything other than exact leaves the last anchor cleared so the status-based
+// path below takes over.
+const NOW_PLAYING_CLOCK_POLL_MS = 50;
+
+async function pollNowPlayingClockLoop(): Promise<void> {
+  if (inputMode === "now-playing" && !nowPlayingClockInFlight) {
+    nowPlayingClockInFlight = true;
+    try {
+      const sample = await fetchNowPlayingClock();
+      nowPlayingClockAnchor = clockSampleIsExact(sample)
+        ? anchorFromClockSample(sample, Date.now())
+        : null;
+    } catch {
+      nowPlayingClockAnchor = null;
+    } finally {
+      nowPlayingClockInFlight = false;
+    }
+  }
+  nowPlayingClockTimer = window.setTimeout(() => {
+    nowPlayingClockTimer = null;
+    void pollNowPlayingClockLoop();
+  }, NOW_PLAYING_CLOCK_POLL_MS);
 }
 
 /**
