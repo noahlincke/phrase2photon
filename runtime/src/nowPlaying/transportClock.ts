@@ -18,6 +18,34 @@ export function nowPlayingClockIsExact(status: NowPlayingStatus | null): boolean
   return observation?.positionSource === "exact" && observation.playbackPositionSeconds !== null;
 }
 
+/** The last observation the premade clock may hold through a tracking loss. */
+export interface NowPlayingHeldObservation {
+  observation: NowPlayingStatus["observation"];
+  /** The show the observation was captured under; the hold only applies to it. */
+  showId: string | null;
+}
+
+/**
+ * The status the playback clock reads, with the tracking-loss hold applied.
+ *
+ * While a premade show rides out the backend's tracking loss the last
+ * observation seen is held in place so the show keeps running on its projected
+ * clock instead of snapping to the start of the track. The hold belongs to the
+ * show it was captured under: served across a show switch it would evaluate
+ * the new show's schedule at the old show's playhead, so it stops applying
+ * until the new show's own clock arrives.
+ */
+export function heldClockStatus(
+  status: NowPlayingStatus | null,
+  held: NowPlayingHeldObservation | null,
+  loadedShowId: string | null
+): NowPlayingStatus | null {
+  if (status && !status.observation && held && held.showId === loadedShowId) {
+    return { ...status, observation: held.observation };
+  }
+  return status;
+}
+
 export function resolveNowPlayingPlaybackSeconds(
   status: NowPlayingStatus | null,
   nowEpochMs: number

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  heldClockStatus,
   isBrowserAudioTransportSource,
   nowPlayingClockIsExact,
   resolveNowPlayingPlaybackSeconds,
@@ -146,5 +147,46 @@ describe("nowPlayingClockIsExact", () => {
 
   it("handles no status at all", () => {
     expect(nowPlayingClockIsExact(null)).toBe(false);
+  });
+});
+
+describe("heldClockStatus", () => {
+  const observationA: NowPlayingObservation = {
+    sourceApp: "Rekordbox",
+    title: "Track A",
+    artist: "Artist A",
+    durationSeconds: 300,
+    observedAt: "2026-05-16T20:59:53.878731Z",
+    playbackPositionSeconds: 120.5,
+    positionSource: "exact",
+    isPlaying: true
+  };
+  const heldA = { observation: observationA, showId: "show-a" };
+  const statusWithoutObservation: NowPlayingStatus = {
+    modeState: "premade_active",
+    observation: null,
+    activeShowId: "show-b",
+    armedShow: null,
+    preparedAudio: {
+      path: "/tmp/track-b.wav",
+      audioUrl: "/api/now-playing/audio/show-b",
+      durationSeconds: 240,
+      provider: "disk"
+    },
+    preparing: null,
+    providerAttempts: []
+  };
+
+  it("keeps holding the observation through a tracking loss on the same show", () => {
+    const served = heldClockStatus(statusWithoutObservation, heldA, "show-a");
+    expect(served?.observation).toEqual(observationA);
+  });
+
+  it("drops a held observation that belongs to another loaded show", () => {
+    // Show A -> show B switch: the held observation describes A's deck
+    // position, so B's schedule must not be evaluated at it.
+    const served = heldClockStatus(statusWithoutObservation, heldA, "show-b");
+    expect(served?.observation).toBeNull();
+    expect(resolveNowPlayingPlaybackSeconds(served, Date.parse("2026-05-16T21:00:00Z"))).toBeNull();
   });
 });

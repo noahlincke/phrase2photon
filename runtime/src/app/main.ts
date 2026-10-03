@@ -49,10 +49,12 @@ import {
   type NowPlayingPlayback
 } from "../nowPlaying/handoff.js";
 import {
+  heldClockStatus,
   isBrowserAudioTransportSource,
   resolveNowPlayingPlaybackDurationSeconds,
   nowPlayingClockIsExact,
-  resolveNowPlayingPlaybackSeconds
+  resolveNowPlayingPlaybackSeconds,
+  type NowPlayingHeldObservation
 } from "../nowPlaying/transportClock.js";
 import {
   createNowPlayingTracking,
@@ -217,7 +219,7 @@ let nowPlayingLastCueStartMs: number | null = null;
 let nowPlayingCueBoundaryReached = false;
 let nowPlayingDriver: NowPlayingDriver = "live-mic";
 let nowPlayingTracking = createNowPlayingTracking();
-let nowPlayingLastObservation: NowPlayingStatus["observation"] | null = null;
+let nowPlayingHeld: NowPlayingHeldObservation | null = null;
 let nowPlayingPollTimer: number | null = null;
 let nowPlayingPollRequested = false;
 let nowPlayingPollInFlight = false;
@@ -1438,7 +1440,7 @@ async function pollNowPlayingLoop(): Promise<void> {
     nowPlayingCueBoundaryReached = false;
     refreshNowPlayingDriver(status);
     if (status.observation) {
-      nowPlayingLastObservation = status.observation;
+      nowPlayingHeld = { observation: status.observation, showId: nowPlayingLoadedShowId() };
     }
     await syncNowPlayingRuntime();
   } catch (error) {
@@ -1512,15 +1514,10 @@ function nowPlayingLoadedShowId(): string | null {
  * running on its projected clock instead of snapping to the start of the track.
  */
 function nowPlayingClockStatus(): NowPlayingStatus | null {
-  if (
-    nowPlayingDriver === "premade" &&
-    nowPlayingStatus &&
-    !nowPlayingStatus.observation &&
-    nowPlayingLastObservation
-  ) {
-    return { ...nowPlayingStatus, observation: nowPlayingLastObservation };
+  if (nowPlayingDriver !== "premade") {
+    return nowPlayingStatus;
   }
-  return nowPlayingStatus;
+  return heldClockStatus(nowPlayingStatus, nowPlayingHeld, nowPlayingLoadedShowId());
 }
 
 /** Runs a status poll as soon as the current one settles; Recover uses this. */
