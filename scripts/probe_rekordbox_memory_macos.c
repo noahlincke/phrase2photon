@@ -5,6 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#define REKORDBOX_DECK_COUNT 4
+// Rekordbox exposes deck positions as a sample index at a fixed 44.1 kHz rate;
+// confirm against a 48 kHz file on hardware before trusting this.
+#define REKORDBOX_SAMPLE_RATE_HZ 44100
 
 typedef struct {
   size_t offsets[8];
@@ -15,6 +21,7 @@ typedef struct {
 typedef struct {
   mach_port_t task;
   mach_vm_address_t base;
+  mach_vm_address_t liveness_addr;
 } process_ctx_t;
 
 typedef struct {
@@ -142,6 +149,7 @@ static int init_process(process_ctx_t *ctx, pid_t pid) {
 
   ctx->task = task;
   ctx->base = base;
+  ctx->liveness_addr = dyld_info.all_image_info_addr;
   return 1;
 }
 
@@ -210,9 +218,105 @@ static void print_track_fields(const char *raw) {
   }
 }
 
+static void copy_sanitized_string(const char *src, char *out, size_t out_size) {
+  size_t j = 0;
+  for (size_t i = 0; src[i] != '\0' && j + 1 < out_size; ++i) {
+    unsigned char c = (unsigned char)src[i];
+    if (isprint(c)) out[j++] = (char)c;
+  }
+  out[j] = '\0';
+}
+
+// Copies the value after `label`, stopping at `next_label`, keeping printable
+// characters only. `next_label` may be NULL to take the rest of the string.
+static void copy_sanitized_field(const char *raw, const char *label, const char *next_label,
+                                 char *out, size_t out_size) {
+  out[0] = '\0';
+  const char *start = strstr(raw, label);
+  if (start == NULL) return;
+  start += strlen(label);
+  while (*start == ' ') start++;
+  char field[256];
+  size_t j = 0;
+  for (size_t i = 0; start[i] != '\0' && j + 1 < sizeof(field); ++i) {
+    if (next_label != NULL && strncmp(start + i, next_label, strlen(next_label)) == 0) break;
+    field[j++] = start[i];
+  }
+  field[j] = '\0';
+  copy_sanitized_string(field, out, out_size);
+}
+
+// Streams one compact tick per interval with every deck's playhead, plus a
+// track line whenever a deck's track changes. Exits non-zero once the task
+// port dies (Rekordbox quit) so the consumer can respawn against the new pid.
+static int run_stream(const process_ctx_t *ctx, int interval_ms) {
+  char last_track[REKORDBOX_DECK_COUNT][256];
+  memset(last_track, 0, sizeof(last_track));
+  char title[160];
+  char artist[160];
+  char anlz[512];
+  char anlz_raw[512];
+
+  for (;;) {
+    uint64_t liveness = 0;
+    if (!read_bytes(ctx->task, ctx->liveness_addr, &liveness, sizeof(liveness))) {
+      fprintf(stderr, "rekordbox task port no longer readable\n");
+      return 1;
+    }
+
+    uint8_t master = 255;
+    mach_vm_address_t addr = 0;
+    int master_deck = -1;
+    if (resolve_pointer_chain(ctx, &g_master_deck, &addr) &&
+        read_bytes(ctx->task, addr, &master, sizeof(master)) && master < REKORDBOX_DECK_COUNT) {
+      master_deck = (int)master;
+    }
+
+    printf("tick mono_ns=%llu master=%d",
+           (unsigned long long)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW), master_deck);
+
+    for (int i = 0; i < REKORDBOX_DECK_COUNT; ++i) {
+      int64_t samples = -1;
+      float bpm = -1.0f;
+      if (!(resolve_pointer_chain(ctx, &g_sample[i], &addr) &&
+            read_bytes(ctx->task, addr, &samples, sizeof(samples)))) {
+        samples = -1;
+      }
+      if (!(resolve_pointer_chain(ctx, &g_bpm[i], &addr) &&
+            read_bytes(ctx->task, addr, &bpm, sizeof(bpm)))) {
+        bpm = -1.0f;
+      }
+      printf(" d%d=%" PRId64 ",%.3f", i + 1, samples, bpm);
+
+      char track[256];
+      memset(track, 0, sizeof(track));
+      if (!(resolve_pointer_chain(ctx, &g_track[i], &addr) &&
+            read_bytes(ctx->task, addr, track, sizeof(track) - 1))) {
+        track[0] = '\0';
+      }
+      if (strcmp(track, last_track[i]) != 0) {
+        copy_sanitized_field(track, "Title:", "Artist:", title, sizeof(title));
+        copy_sanitized_field(track, "Artist:", "Album:", artist, sizeof(artist));
+        anlz[0] = '\0';
+        if (track[0] != '\0' && resolve_pointer_chain(ctx, &g_anlz[i], &addr) &&
+            read_bytes(ctx->task, addr, anlz_raw, sizeof(anlz_raw) - 1)) {
+          copy_sanitized_string(anlz_raw, anlz, sizeof(anlz));
+        }
+        memcpy(last_track[i], track, sizeof(track));
+        printf("\ntrack deck=%d title=%s artist=%s anlz=%s", i + 1, title, artist, anlz);
+      }
+    }
+    printf("\n");
+    fflush(stdout);
+
+    struct timespec pause = {interval_ms / 1000, (long)(interval_ms % 1000) * 1000000L};
+    nanosleep(&pause, NULL);
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc < 3) {
-    fprintf(stderr, "usage: probe_rekordbox_memory_macos <pid> <chains-file>\n");
+    fprintf(stderr, "usage: probe_rekordbox_memory_macos <pid> <chains-file> [--stream <interval_ms>]\n");
     return 2;
   }
   pid_t pid = (pid_t)atoi(argv[1]);
@@ -225,8 +329,23 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  int stream_interval_ms = 0;
+  if (argc >= 5) {
+    if (strcmp(argv[3], "--stream") != 0) {
+      fprintf(stderr, "unknown argument: %s\n", argv[3]);
+      return 2;
+    }
+    stream_interval_ms = atoi(argv[4]);
+    if (stream_interval_ms <= 0) {
+      fprintf(stderr, "invalid stream interval: %s\n", argv[4]);
+      return 2;
+    }
+  }
+
   process_ctx_t ctx = {0};
   if (!init_process(&ctx, pid)) return 1;
+
+  if (stream_interval_ms > 0) return run_stream(&ctx, stream_interval_ms);
 
   printf("pid=%d\n", pid);
   printf("base=0x%llx\n", (unsigned long long)ctx.base);
@@ -264,7 +383,7 @@ int main(int argc, char **argv) {
     if (resolve_pointer_chain(&ctx, &g_sample[i], &addr) &&
         read_bytes(ctx.task, addr, &samples, sizeof(samples))) {
       printf("  sample_position=%" PRId64 "\n", samples);
-      printf("  seconds=%.3f\n", (double)samples / 44100.0);
+      printf("  seconds=%.3f\n", (double)samples / (double)REKORDBOX_SAMPLE_RATE_HZ);
     } else {
       printf("  sample_position=unreadable\n");
     }

@@ -40,6 +40,9 @@ REKORDBOX_CONTENT_EVENT_BASELINE_MAX_AGE_SECONDS = 30 * 60
 REKORDBOX_MEMORY_DEFAULT_APP = Path("/Applications/rekordbox 7/rekordbox.app")
 REKORDBOX_MEMORY_OFFSETS_PATH = Path(__file__).resolve().parent / "rekordbox_offsets.json"
 REKORDBOX_MEMORY_PROBE_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "run_rekordbox_memory_probe.sh"
+# Rekordbox exposes deck positions as a sample index at a fixed 44.1 kHz rate;
+# confirm against a 48 kHz file on hardware before trusting this.
+REKORDBOX_MEMORY_SAMPLE_RATE_HZ = 44100
 _LAST_REKORDBOX_MEMORY_STATUS: str | None = None
 _REKORDBOX_ENTITLEMENT_CACHE: dict[tuple[str, int], bool] = {}
 
@@ -596,39 +599,41 @@ def _set_rekordbox_memory_status(status: str) -> None:
     _LAST_REKORDBOX_MEMORY_STATUS = status
 
 
-def _poll_rekordbox_memory_states(*, runner: Runner = subprocess.run) -> list[RekordboxMemoryDeckState]:
+def _rekordbox_memory_launch_context(*, runner: Runner) -> tuple[int, Path] | str:
+    """The probe's pid and chains file, or the status string explaining why not."""
     if not REKORDBOX_MEMORY_PROBE_SCRIPT.exists():
-        _set_rekordbox_memory_status("probe-failed:missing-probe-script")
-        return []
+        return "probe-failed:missing-probe-script"
     pid = _rekordbox_memory_probe_pid(runner=runner)
     if pid is None:
-        _set_rekordbox_memory_status("not-running")
-        return []
+        return "not-running"
     bundle = _rekordbox_app_bundle()
     if not (bundle / "Contents" / "Info.plist").exists():
-        _set_rekordbox_memory_status("probe-failed:app-missing")
-        return []
+        return "probe-failed:app-missing"
     version = _rekordbox_app_version(bundle)
     if version is None:
-        _set_rekordbox_memory_status("probe-failed:version-unreadable")
-        return []
+        return "probe-failed:version-unreadable"
     try:
         offsets = _rekordbox_memory_offsets()
     except FileNotFoundError:
-        _set_rekordbox_memory_status("probe-failed:offsets-missing")
-        return []
+        return "probe-failed:offsets-missing"
     except json.JSONDecodeError:
-        _set_rekordbox_memory_status("probe-failed:offsets-invalid")
-        return []
+        return "probe-failed:offsets-invalid"
     entry = offsets.get(version)
     if entry is None:
-        _set_rekordbox_memory_status(f"unsupported-version:{version}")
-        return []
+        return f"unsupported-version:{version}"
     if not _rekordbox_app_is_resigned(bundle, runner=runner):
-        _set_rekordbox_memory_status("not-resigned")
-        return []
+        return "not-resigned"
     chains_path = _rekordbox_chains_path(version)
     chains_path.write_text(_rekordbox_chains_text(entry), encoding="utf-8")
+    return pid, chains_path
+
+
+def _poll_rekordbox_memory_states(*, runner: Runner = subprocess.run) -> list[RekordboxMemoryDeckState]:
+    launch = _rekordbox_memory_launch_context(runner=runner)
+    if isinstance(launch, str):
+        _set_rekordbox_memory_status(launch)
+        return []
+    pid, chains_path = launch
     try:
         result = runner(
             ["bash", str(REKORDBOX_MEMORY_PROBE_SCRIPT), str(pid), str(chains_path)],
@@ -982,7 +987,11 @@ def _apply_rekordbox_memory_clock(
     *,
     memory_states: list[RekordboxMemoryDeckState],
 ) -> TrackObservation:
-    matching_state = _matching_rekordbox_memory_state(observation, memory_states=memory_states)
+    matching_state = _matching_rekordbox_memory_state(
+        observation.title,
+        observation.artist,
+        memory_states=memory_states,
+    )
     if matching_state is None or matching_state.sample_position is None:
         return observation
 
@@ -990,7 +999,7 @@ def _apply_rekordbox_memory_clock(
     previous_sample_position = _REKORDBOX_LAST_MEMORY_SAMPLES.get(matching_state.deck)
     _REKORDBOX_LAST_MEMORY_SAMPLES[matching_state.deck] = matching_state.sample_position
 
-    playback_position_seconds = max(0.0, matching_state.sample_position / 44100.0)
+    playback_position_seconds = max(0.0, matching_state.sample_position / REKORDBOX_MEMORY_SAMPLE_RATE_HZ)
     if previous_sample_position is None:
         is_playing = playback_position_seconds > 0
     else:
@@ -1010,14 +1019,15 @@ def _apply_rekordbox_memory_clock(
 
 
 def _matching_rekordbox_memory_state(
-    observation: TrackObservation,
+    observation_title: str,
+    observation_artist: str | None,
     *,
     memory_states: list[RekordboxMemoryDeckState],
 ) -> RekordboxMemoryDeckState | None:
-    observation_title = normalize_name(observation.title)
-    observation_artist = normalize_name(observation.artist)
+    observation_title = normalize_name(observation_title)
+    observation_artist = normalize_name(observation_artist)
     for state in memory_states:
-        if normalize_name(state.title) != observation_title:
+        if normalize_name(state.title or "") != observation_title:
             continue
         state_artist = normalize_name(state.artist)
         if observation_artist and state_artist and state_artist != observation_artist:

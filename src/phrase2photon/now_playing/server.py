@@ -31,6 +31,7 @@ from phrase2photon.now_playing.providers import (
     scdl_candidates,
     spotdl_candidates,
 )
+from phrase2photon.now_playing.rekordbox_stream import RekordboxMemoryStream
 from phrase2photon.now_playing.source_polling import (
     last_rekordbox_diagnostics,
     now_playing_cache_root,
@@ -112,6 +113,7 @@ class NowPlayingService:
         measure_duration: MeasureDurationFn = measured_duration_seconds,
         ensure_show: EnsureShowFn | None = None,
         min_refresh_interval_seconds: float = 0.5,
+        memory_stream: RekordboxMemoryStream | None = None,
     ) -> None:
         self.cache_root = cache_root or now_playing_cache_root()
         self.gate = gate or DurationGate(max_delta_seconds=2.0)
@@ -127,6 +129,7 @@ class NowPlayingService:
         self.measure_duration = measure_duration
         self.ensure_show = ensure_show or (lambda resolved: ensure_compiled_show(resolved, cache_root=self.cache_root))
         self.min_refresh_interval_seconds = min_refresh_interval_seconds
+        self.memory_stream = memory_stream if memory_stream is not None else RekordboxMemoryStream()
 
         self._lock = threading.Lock()
         self._status = current_status_payload()
@@ -143,6 +146,19 @@ class NowPlayingService:
         self.refresh()
         with self._lock:
             return copy.deepcopy(self._status)
+
+    def start_memory_stream(self) -> None:
+        self.memory_stream.start()
+
+    def clock_payload(self) -> dict[str, object]:
+        with self._lock:
+            observation = self._status.get("observation")
+        title = observation.get("title") if isinstance(observation, dict) else None
+        artist = observation.get("artist") if isinstance(observation, dict) else None
+        return self.memory_stream.clock_payload(
+            observation_title=title if isinstance(title, str) else None,
+            observation_artist=artist if isinstance(artist, str) else None,
+        )
 
     def refresh(self, *, force: bool = False) -> dict[str, object]:
         with self._lock:
@@ -648,12 +664,17 @@ def route_request(
     headers: Mapping[str, str] | None = None,
     cache_root: Path | None = None,
     status_provider: Callable[[], dict[str, object]] | None = None,
+    clock_provider: Callable[[], dict[str, object]] | None = None,
 ) -> RouteResponse:
     normalized_path = urlparse(path).path
     root = cache_root or now_playing_cache_root()
 
     if normalized_path == "/api/now-playing/status":
         provider = status_provider or _default_now_playing_service().status_payload
+        return _json_response(provider())
+
+    if normalized_path == "/api/now-playing/clock":
+        provider = clock_provider or _default_now_playing_service().clock_payload
         return _json_response(provider())
 
     if normalized_path == "/api/now-playing/debug/rekordbox":
@@ -689,6 +710,7 @@ def route_request(
 
 def run_server(host: str, port: int) -> None:
     service = _default_now_playing_service()
+    service.start_memory_stream()
 
     class NowPlayingHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
