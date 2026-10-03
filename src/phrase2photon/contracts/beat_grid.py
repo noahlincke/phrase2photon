@@ -104,5 +104,15 @@ def bar_beat_for_seconds(grid: BeatGrid, seconds: float) -> str:
     return bar_beat_for_beats(seconds_to_beats(grid, seconds), grid.beats_per_bar)
 
 
+def beats_for_bar_beat(bar_beat: str, beats_per_bar: int) -> float:
+    bar_text, beat_text = bar_beat.split("|")
+    try:
+        bar = int(bar_text)
+        beat = float(beat_text)
+    except ValueError:
+        raise ValueError(f"Invalid bar beat value: {bar_beat}") from None
+    return max(0.0, (bar - 1) * beats_per_bar + (beat - 1))
+
+
 def _format_beat_number(value: float) -> str:
     return f"{value:.3f}".rstrip("0").rstrip(".")

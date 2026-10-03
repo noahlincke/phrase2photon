@@ -169,6 +169,8 @@ class Phrase2PhotonCompiler:
 
 
 def build_tempo_map(extraction: LiveSetExtraction) -> list[TempoMapSegment] | None:
+    if extraction.tempo_map is not None:
+        return extraction.tempo_map
     if extraction.first_downbeat_seconds <= 0:
         return None
     return [

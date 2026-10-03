@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from phrase2photon.contracts.show_package import TempoMapSegment
+
 
 class ToolCatalogEntry(BaseModel):
     name: str
@@ -115,6 +117,10 @@ class LiveSetExtraction(BaseModel):
     tempo: float
     time_signature: str
     first_downbeat_seconds: float = 0.0
+    # Carried through when the caller already knows the tempo map (recordings
+    # assembled from per-track analyses); otherwise build_tempo_map derives the
+    # single-segment map from first_downbeat_seconds.
+    tempo_map: list[TempoMapSegment] | None = None
     scale: str | None = None
     scale_pitches: str | None = None
     producer_pal_version: str | None = None

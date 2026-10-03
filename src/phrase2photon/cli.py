@@ -114,7 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument(
         "--paths-file",
         required=True,
-        help='JSON list of entries with "path" (absolute) and optional "title", "artist", "version", "label".',
+        help=(
+            'JSON list of entries with "path" (absolute) and optional "title", "artist", "version", "label". '
+            'A recording entry instead carries "segments": per-track "title", "artist", '
+            '"start_seconds" (fade-in start), "full_seconds" (previous track gone) and optional "bpm".'
+        ),
     )
     prepare_parser.add_argument("--report", help="Write the per-entry report JSON to a file.")
     prepare_parser.add_argument("--force", action="store_true", help="Rebuild shows even if they are already cached.")
