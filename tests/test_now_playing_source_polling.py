@@ -747,9 +747,10 @@ def test_apply_rekordbox_memory_clock_marks_paused_when_sample_position_freezes(
 
 def test_rekordbox_offsets_json_covers_known_versions() -> None:
     offsets = source_polling._rekordbox_memory_offsets()
-    assert set(offsets) == {"7.2.8", "7.2.17", "7.2.18"}
+    assert set(offsets) == {"7.2.8", "7.2.17", "7.2.18", "7.2.19"}
+    assert offsets["7.2.19"]["master_deck"] is None
     for entry in offsets.values():
-        assert len(entry["master_deck"]) >= 2
+        assert entry["master_deck"] is None or len(entry["master_deck"]) >= 2
         assert set(entry["decks"]) == {"1", "2", "3", "4"}
         for deck_entry in entry["decks"].values():
             assert set(deck_entry) == {"bpm", "sample_position", "track_info", "anlz_path"}
@@ -949,3 +950,10 @@ def test_rekordbox_diagnostics_include_memory_clock_status(monkeypatch) -> None:
         selected_via=None,
     )
     assert diagnostics.memory_clock_status == "not-resigned"
+
+
+def test_rekordbox_chains_text_omits_unknown_master() -> None:
+    entry = source_polling._rekordbox_memory_offsets()["7.2.19"]
+    text = source_polling._rekordbox_chains_text(entry)
+    assert not any(line.startswith("master ") for line in text.splitlines())
+    assert len(text.splitlines()) == 16

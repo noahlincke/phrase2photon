@@ -100,7 +100,7 @@ static int load_chains(const char *path) {
   }
   fclose(file);
   if (!ok) return 0;
-  if (g_master_deck.offset_count == 0) return 0;
+  // The master chain is optional: without it the master deck reads unreadable.
   for (int i = 0; i < 4; ++i) {
     if (g_bpm[i].offset_count == 0 || g_sample[i].offset_count == 0 ||
         g_track[i].offset_count == 0 || g_anlz[i].offset_count == 0) {

@@ -547,7 +547,9 @@ _REKORDBOX_CHAIN_FILE_TOKENS = {
 
 
 def _rekordbox_chains_text(entry: dict[str, Any]) -> str:
-    lines = ["master 0 " + " ".join(entry["master_deck"])]
+    # A null master chain means the master deck isn't known for this version;
+    # the probe then reports it unreadable and deck choice falls back to titles.
+    lines = [] if entry["master_deck"] is None else ["master 0 " + " ".join(entry["master_deck"])]
     for deck in range(1, 5):
         deck_entry = entry["decks"][str(deck)]
         for key, token in _REKORDBOX_CHAIN_FILE_TOKENS.items():
