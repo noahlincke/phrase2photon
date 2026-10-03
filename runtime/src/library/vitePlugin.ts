@@ -669,7 +669,7 @@ function streamAudio(req: IncomingMessage, res: ServerResponse, audioPath: strin
       "Content-Type": contentType,
       "Accept-Ranges": "bytes"
     });
-    createReadStream(audioPath).pipe(res);
+    streamAudioFile(audioPath, res);
     return;
   }
 
@@ -687,5 +687,24 @@ function streamAudio(req: IncomingMessage, res: ServerResponse, audioPath: strin
     "Content-Length": chunkSize,
     "Content-Type": contentType
   });
-  createReadStream(audioPath, { start, end }).pipe(res);
+  streamAudioFile(audioPath, res, { start, end });
+}
+
+/**
+ * Streams a library audio file to the response. A read failure (for example a
+ * dehydrated iCloud placeholder) must not escape as an unhandled stream error:
+ * that would kill the whole dev server and cascade ERR_CONNECTION_REFUSED
+ * across every later e2e test.
+ */
+function streamAudioFile(
+  audioPath: string,
+  res: ServerResponse,
+  range?: { start: number; end: number }
+): void {
+  const stream = createReadStream(audioPath, range);
+  stream.on("error", (error) => {
+    console.error(`[p2p] streaming ${audioPath} failed:`, error);
+    res.destroy();
+  });
+  stream.pipe(res);
 }
