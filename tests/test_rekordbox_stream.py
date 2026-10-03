@@ -234,7 +234,7 @@ def test_parse_stream_tick_unreadable_bpm_is_none() -> None:
 
 def test_parse_stream_track_line_with_spaces() -> None:
     track = rekordbox_stream.parse_rekordbox_stream_line(
-        "track deck=3 title=My Song artist=An Artist anlz=/music/My Song 12/ANLZ0000.DAT\n"
+        "track deck=3\ttitle=My Song\tartist=An Artist\tanlz=/music/My Song 12/ANLZ0000.DAT\n"
     )
     assert track == rekordbox_stream.RekordboxStreamTrack(
         deck=3,
@@ -245,7 +245,7 @@ def test_parse_stream_track_line_with_spaces() -> None:
 
 
 def test_parse_stream_track_line_empty_fields() -> None:
-    track = rekordbox_stream.parse_rekordbox_stream_line("track deck=1 title= artist= anlz=\n")
+    track = rekordbox_stream.parse_rekordbox_stream_line("track deck=1\ttitle=\tartist=\tanlz=\n")
     assert track is not None
     assert track.title is None
     assert track.artist is None
@@ -261,18 +261,29 @@ def test_parse_stream_track_line_empty_fields() -> None:
         "tick master=0 d1=1,2 d2=-1,-1 d3=-1,-1 d4=-1,-1",
         "tick mono_ns=1 master=9 d1=-1,-1 d2=-1,-1 d3=-1,-1 d4=-1,-1",
         "tick mono_ns=1 master=0 d1=oops,128 d2=-1,-1 d3=-1,-1 d4=-1,-1",
-        "track deck=9 title=x artist=y anlz=z",
-        "track oops title=x artist=y anlz=z",
+        "track deck=9\ttitle=x\tartist=y\tanlz=z",
+        "track oops\ttitle=x\tartist=y\tanlz=z",
     ],
 )
 def test_parse_stream_ignores_malformed_lines(line: str) -> None:
     assert rekordbox_stream.parse_rekordbox_stream_line(line + "\n") is None
 
 
+def test_parse_stream_track_title_containing_a_field_marker() -> None:
+    # Fields are tab-separated, so a title that happens to contain " artist="
+    # stays whole instead of corrupting the fields.
+    track = rekordbox_stream.parse_rekordbox_stream_line(
+        "track deck=1\ttitle=Mix artist=y\tartist=An Artist\tanlz=/a/ANLZ0000.DAT\n"
+    )
+    assert track == rekordbox_stream.RekordboxStreamTrack(
+        deck=1, title="Mix artist=y", artist="An Artist", anlz_path="/a/ANLZ0000.DAT"
+    )
+
+
 def test_active_deck_prefers_master_deck_with_track() -> None:
     stream, _clock, _popen, _runner = _stream([])
-    stream._apply_line("track deck=2 title=Track B artist=B anlz=/b/ANLZ0000.DAT\n")
-    stream._apply_line("track deck=3 title=Track C artist=C anlz=/c/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=2\ttitle=Track B\tartist=B\tanlz=/b/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=3\ttitle=Track C\tartist=C\tanlz=/c/ANLZ0000.DAT\n")
     stream._apply_line(TICK.format(n=1, master=1, d1="0,0.000", d2="100,128.000", d3="200,130.000", d4="-1,-1"))
     payload = stream.clock_payload()
     assert payload["deck"] == 2
@@ -282,7 +293,7 @@ def test_active_deck_prefers_master_deck_with_track() -> None:
 
 def test_active_deck_falls_back_to_title_match_without_master() -> None:
     stream, _clock, _popen, _runner = _stream([])
-    stream._apply_line("track deck=3 title=Track C artist=C anlz=/c/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=3\ttitle=Track C\tartist=C\tanlz=/c/ANLZ0000.DAT\n")
     stream._apply_line(TICK.format(n=1, master=-1, d1="-1,-1", d2="-1,-1", d3="500,128.000", d4="-1,-1"))
     payload = stream.clock_payload(observation_title="Track C", observation_artist="c")
     assert payload["deck"] == 3
@@ -290,7 +301,7 @@ def test_active_deck_falls_back_to_title_match_without_master() -> None:
 
 def test_active_deck_ignores_master_deck_without_track() -> None:
     stream, _clock, _popen, _runner = _stream([])
-    stream._apply_line("track deck=3 title=Track C artist=C anlz=/c/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=3\ttitle=Track C\tartist=C\tanlz=/c/ANLZ0000.DAT\n")
     stream._apply_line(TICK.format(n=1, master=0, d1="0,0.000", d2="-1,-1", d3="500,128.000", d4="-1,-1"))
     payload = stream.clock_payload(observation_title="Track C", observation_artist="C")
     assert payload["deck"] == 3
@@ -298,7 +309,7 @@ def test_active_deck_ignores_master_deck_without_track() -> None:
 
 def test_active_deck_none_without_match() -> None:
     stream, _clock, _popen, _runner = _stream([])
-    stream._apply_line("track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n")
     stream._apply_line(TICK.format(n=1, master=-1, d1="0,0.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"))
     assert stream.clock_payload(observation_title="Other")["deck"] is None
     assert stream.clock_payload()["deck"] is None
@@ -306,7 +317,7 @@ def test_active_deck_none_without_match() -> None:
 
 def test_clock_payload_playing_and_age() -> None:
     stream, clock, _popen, _runner = _stream([])
-    stream._apply_line("track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n")
     stream._apply_line(TICK.format(n=1, master=0, d1="44100,128.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"))
     clock.advance(0.05)
     payload = stream.clock_payload()
@@ -320,7 +331,7 @@ def test_clock_payload_playing_and_age() -> None:
 
 def test_clock_payload_marks_stale_after_quiet_period() -> None:
     stream, clock, _popen, _runner = _stream([])
-    stream._apply_line("track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n")
     stream._apply_line(TICK.format(n=1, master=0, d1="44100,128.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"))
     clock.advance(rekordbox_stream.STREAM_STALE_SECONDS + 0.1)
     payload = stream.clock_payload()
@@ -350,13 +361,13 @@ def test_stream_spawns_probe_in_stream_mode() -> None:
 def test_stream_restarts_subprocess_after_exit() -> None:
     first = FakeStreamProcess(
         [
-            "track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n",
+            "track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n",
             TICK.format(n=1, master=0, d1="44100,128.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"),
         ]
     )
     second = FakeStreamProcess(
         [
-            "track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n",
+            "track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n",
             TICK.format(n=2, master=0, d1="88200,128.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"),
         ]
     )
@@ -422,7 +433,7 @@ def test_stream_restarts_a_wedged_probe_after_silence() -> None:
     wedged = WedgedStreamProcess()
     second = HeldOpenStreamProcess(
         [
-            "track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n",
+            "track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n",
             TICK.format(n=1, master=0, d1="44100,128.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"),
         ]
     )

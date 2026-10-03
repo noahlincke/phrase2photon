@@ -140,18 +140,21 @@ def _parse_stream_tick(tokens: list[str]) -> RekordboxStreamTick | None:
 
 
 def _parse_stream_track(line: str) -> RekordboxStreamTrack | None:
-    deck_token, _, rest = line[len("track "):].partition(" ")
-    deck = _int_or_none(deck_token.removeprefix("deck="))
-    if deck is None or not 1 <= deck <= 4 or not rest.startswith("title="):
+    # Fields are tab-separated so a title containing " artist=" or " anlz="
+    # cannot corrupt them; the probe strips tabs from every field it prints.
+    fields = line[len("track "):].split("\t")
+    if len(fields) != 4 or not fields[0].startswith("deck="):
         return None
-    artist_index = rest.find(" artist=")
-    anlz_index = rest.rfind(" anlz=")
-    if artist_index < 0 or anlz_index < 0:
+    deck = _int_or_none(fields[0].removeprefix("deck="))
+    if deck is None or not 1 <= deck <= 4:
         return None
-    title = rest[len("title="):artist_index]
-    artist = rest[artist_index + len(" artist="):anlz_index]
-    anlz = rest[anlz_index + len(" anlz="):]
-    return RekordboxStreamTrack(deck=deck, title=title or None, artist=artist or None, anlz_path=anlz or None)
+    prefixes = ("title=", "artist=", "anlz=")
+    if not all(field.startswith(prefix) for field, prefix in zip(fields[1:], prefixes)):
+        return None
+    title, artist, anlz = (
+        field[len(prefix):] or None for field, prefix in zip(fields[1:], prefixes)
+    )
+    return RekordboxStreamTrack(deck=deck, title=title, artist=artist, anlz_path=anlz)
 
 
 class RekordboxMemoryStream:

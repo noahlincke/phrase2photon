@@ -303,7 +303,10 @@ static int run_stream(const process_ctx_t *ctx, int interval_ms) {
           copy_sanitized_string(anlz_raw, anlz, sizeof(anlz));
         }
         memcpy(last_track[i], track, sizeof(track));
-        printf("\ntrack deck=%d title=%s artist=%s anlz=%s", i + 1, title, artist, anlz);
+        // Fields are tab-separated: a title containing " artist=" or " anlz="
+        // must not corrupt the fields, and copy_sanitized_string never keeps
+        // tabs, so a tab inside a field is impossible.
+        printf("\ntrack deck=%d\ttitle=%s\tartist=%s\tanlz=%s", i + 1, title, artist, anlz);
       }
     }
     printf("\n");

@@ -45,6 +45,7 @@ import {
 import {
   applyNowPlayingStatus,
   createNowPlayingSession,
+  preparedAudioForShow,
   type NowPlayingPlayback
 } from "../nowPlaying/handoff.js";
 import {
@@ -679,6 +680,7 @@ function renderLoop(nowMs: number): void {
   const delta = Math.min(0.1, (nowMs - lastFrameMs) / 1000);
   lastFrameMs = nowMs;
 
+  feedDeckFollowerLiveBpm();
   const frame = currentMusicalFrame();
   if (frame) {
     visuals.render(frame.musical, nowMs / 1000, delta);
@@ -1091,10 +1093,14 @@ function currentBpm(): number {
   if (liveMicDrives() && liveAnalyzer) {
     return liveAnalyzer.currentBpm;
   }
+  return loaded?.show.song.tempo ?? 126;
+}
+
+/** Feeds the deck follower the analyser's live tempo, once per frame. */
+function feedDeckFollowerLiveBpm(): void {
   if (liveAnalyzer && loaded && deckFollower.snapshot.state === "following") {
     deckFollower.setLiveBpm(liveAnalyzer.currentBpm, loaded.show.song.tempo);
   }
-  return loaded?.show.song.tempo ?? 126;
 }
 
 // --------------------------------------------------------------- playback
@@ -1541,7 +1547,10 @@ let deckFollowerTrackKey: string | null = null;
  * position exactly, and in Mic mode there is no known track to follow.
  */
 async function prepareDeckFollowing(): Promise<void> {
-  const audioUrl = nowPlayingStatus?.preparedAudio?.audioUrl ?? null;
+  // The server emits prepared audio keyed on the armed show; audio armed for
+  // the next track while this show is still loaded must not be paired with
+  // this show's tempo before the new show activates.
+  const audioUrl = preparedAudioForShow(nowPlayingStatus, loaded?.libraryTrack.id ?? null)?.audioUrl ?? null;
   const tempo = loaded?.show.song.tempo ?? null;
   if (
     inputMode !== "now-playing" ||

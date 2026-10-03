@@ -13,13 +13,24 @@ export interface BeatGrid {
 
 /** The show's beat grid: its tempo map, or today's single-tempo behaviour. */
 export function gridFor(show: ShowPackage): BeatGrid {
-  return {
+  let grid = gridCache.get(show);
+  if (grid) {
+    return grid;
+  }
+  grid = {
     segments: show.song.tempo_map ?? [
       { start_seconds: 0, bpm: show.song.tempo, downbeat_seconds: 0 }
     ],
     beatsPerBar: beatsPerBarFromSignature(show.song.time_signature)
   };
+  gridCache.set(show, grid);
+  return grid;
 }
+
+// Show packages are treated as immutable once loaded, so the grid can be
+// memoised per package and its spans per grid: the frame loop asks for both
+// several times per frame.
+const gridCache = new WeakMap<ShowPackage, BeatGrid>();
 
 interface GridSpan {
   startSeconds: number;
@@ -31,7 +42,19 @@ interface GridSpan {
 /** Tolerance for treating a downbeat as exactly bar-aligned despite float noise. */
 const BAR_SNAP_BEATS = 1e-6;
 
+const gridSpanCache = new WeakMap<BeatGrid, GridSpan[]>();
+
 function gridSpans(grid: BeatGrid): GridSpan[] {
+  let spans = gridSpanCache.get(grid);
+  if (spans) {
+    return spans;
+  }
+  spans = buildGridSpans(grid);
+  gridSpanCache.set(grid, spans);
+  return spans;
+}
+
+function buildGridSpans(grid: BeatGrid): GridSpan[] {
   const spans: GridSpan[] = [];
   grid.segments.forEach((segment, index) => {
     const previous = spans[index - 1];

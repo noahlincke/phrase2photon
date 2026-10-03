@@ -48,7 +48,11 @@ MAX_TEMPO = 200.0
 
 
 def _macos_file_flags(path: Path) -> int:
-    return path.stat().st_flags
+    try:
+        return path.stat().st_flags
+    except AttributeError:
+        # st_flags is macOS-only; other platforms have no dataless placeholders.
+        return 0
 
 
 def _resolve_disk_track(
@@ -464,35 +468,40 @@ def _phrase_coverage_problems(package: ShowPackage, *, duration_seconds: float) 
     if not package.phrases:
         return ["show has no phrases"]
 
-    tempo = package.song.tempo
-    bar_seconds = 240.0 / tempo
+    # Locate every phrase through the beat grid: single-track shows carry a
+    # tempo map, and computing boundaries at a constant tempo turns real
+    # boundaries into false gaps, overlaps and early endings.
+    tempo_map = package.song.tempo_map or [
+        TempoMapSegment(start_seconds=0.0, bpm=package.song.tempo, downbeat_seconds=0.0)
+    ]
+    grid = BeatGrid(
+        segments=tempo_map,
+        beats_per_bar=beats_per_bar_from_signature(package.song.time_signature),
+    )
     spans = [
         (
-            _bar_beat_seconds(phrase.range.start_bar_beat, tempo),
-            _bar_beat_seconds(phrase.range.end_bar_beat, tempo),
+            beats_to_seconds(grid, beats_for_bar_beat(phrase.range.start_bar_beat, grid.beats_per_bar)),
+            beats_to_seconds(grid, beats_for_bar_beat(phrase.range.end_bar_beat, grid.beats_per_bar)),
         )
         for phrase in package.phrases
     ]
+    first_downbeat = beats_to_seconds(grid, 0)
+    # The tail beyond the last analysed bar is bounded by bars, not zero; two
+    # bars' worth at the tempo the track ends in.
+    tail_seconds = 2 * (240.0 / tempo_map[-1].bpm)
     problems: list[str] = []
-    if spans[0][0] > bar_seconds:
-        problems.append(f"first phrase starts at {spans[0][0]:.3f}s, after the track begins")
+    if spans[0][0] > first_downbeat + PHRASE_GAP_TOLERANCE_SECONDS:
+        problems.append(
+            f"first phrase starts at {spans[0][0]:.3f}s, after the first downbeat at {first_downbeat:.3f}s"
+        )
     for (_, previous_end), (start, _) in zip(spans, spans[1:]):
         gap = start - previous_end
         if gap > PHRASE_GAP_TOLERANCE_SECONDS:
             problems.append(f"phrases leave a {gap:.3f}s gap at {previous_end:.3f}s")
         elif gap < -PHRASE_GAP_TOLERANCE_SECONDS:
             problems.append(f"phrases overlap by {-gap:.3f}s at {start:.3f}s")
-    # Phrase boundaries sit on the analyser's bar grid, which is anchored to
-    # the first downbeat rather than to second zero, so the uncovered lead-in
-    # and tail are bounded by bars, not zero.
-    if spans[-1][1] < duration_seconds - 2 * bar_seconds:
+    if spans[-1][1] < duration_seconds - tail_seconds:
         problems.append(f"phrases end at {spans[-1][1]:.3f}s but the track runs {duration_seconds:.3f}s")
     if duration_seconds > 120.0 and len(package.phrases) < 4:
         problems.append(f"only {len(package.phrases)} phrases for a {duration_seconds:.0f}s track")
     return problems
-
-
-def _bar_beat_seconds(bar_beat: str, tempo: float) -> float:
-    bar_text, beat_text = bar_beat.split("|")
-    beats = (int(bar_text) - 1) * 4 + (float(beat_text) - 1)
-    return beats * 60.0 / tempo

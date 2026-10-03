@@ -5,10 +5,22 @@ from pathlib import Path
 
 import pytest
 
-from phrase2photon.contracts.show_package import ShowPackage
+from phrase2photon.contracts.show_package import (
+    EnergyFeatures,
+    Phrase,
+    PhraseRange,
+    ShowPackage,
+    SongMeta,
+    TempoMapSegment,
+    VisualLook,
+)
 from phrase2photon.now_playing.identity import audio_identity_slug
 from phrase2photon.now_playing.models import PreparedAudioAsset, ResolvedNowPlayingTrack, TrackObservation
-from phrase2photon.now_playing.prepare import ensure_show_for_audio_file, prepare_show_entry
+from phrase2photon.now_playing.prepare import (
+    _phrase_coverage_problems,
+    ensure_show_for_audio_file,
+    prepare_show_entry,
+)
 from phrase2photon.now_playing.providers import measured_duration_seconds
 from phrase2photon.now_playing.server import audio_sha256_file, ensure_compiled_show
 from phrase2photon.now_playing.track_analysis import TrackAnalysis
@@ -142,3 +154,56 @@ def test_prepare_path_matches_service_path_for_same_file(tmp_path: Path, monkeyp
 
 
 
+
+
+def _phrase(start_bar_beat: str, end_bar_beat: str, index: int) -> Phrase:
+    return Phrase(
+        phrase_id=f"phrase_{index}",
+        name=f"Phrase {index}",
+        range=PhraseRange(start_bar_beat=start_bar_beat, end_bar_beat=end_bar_beat),
+        energy=EnergyFeatures(level="low", dynamics=0.2, tension=0.1),
+        visual_look=VisualLook(
+            palette="smoke-cool", motion_style="slow_drift", composition="sparse", notes=[]
+        ),
+    )
+
+
+def _show_with_tempo_map(tempo_map: list[TempoMapSegment], phrases: list[Phrase]) -> ShowPackage:
+    return ShowPackage(
+        version="0.1.0",
+        song=SongMeta(
+            song_id="song",
+            title="Song",
+            tempo=tempo_map[0].bpm,
+            time_signature="4/4",
+            tempo_map=tempo_map,
+        ),
+        phrases=phrases,
+        lighting_cues=[],
+        dmx_laser_cues=[],
+    )
+
+
+def test_phrase_coverage_validates_through_the_tempo_map() -> None:
+    # Bars 1-15 at 120 BPM (2 s per bar), then 60 BPM (4 s per bar). The two
+    # phrases tile the track exactly; constant-tempo math places the last
+    # boundary at 50 s and reports a tail that does not exist.
+    tempo_map = [
+        TempoMapSegment(start_seconds=0.0, bpm=120.0, downbeat_seconds=0.0),
+        TempoMapSegment(start_seconds=30.0, bpm=60.0, downbeat_seconds=30.0),
+    ]
+    package = _show_with_tempo_map(
+        tempo_map, [_phrase("1|1", "16|1", 0), _phrase("16|1", "26|1", 1)]
+    )
+
+    assert _phrase_coverage_problems(package, duration_seconds=70.0) == []
+
+
+def test_phrase_coverage_still_reports_real_gaps() -> None:
+    tempo_map = [TempoMapSegment(start_seconds=0.0, bpm=120.0, downbeat_seconds=0.0)]
+    package = _show_with_tempo_map(
+        tempo_map, [_phrase("1|1", "5|1", 0), _phrase("7|1", "9|1", 1)]
+    )
+
+    problems = _phrase_coverage_problems(package, duration_seconds=100.0)
+    assert any("gap" in problem for problem in problems)
