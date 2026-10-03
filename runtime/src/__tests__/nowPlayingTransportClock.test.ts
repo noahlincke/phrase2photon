@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  deckCueBpm,
   heldClockStatus,
   heldFromStatus,
   isBrowserAudioTransportSource,
@@ -221,5 +222,46 @@ describe("heldFromStatus", () => {
       activeShowId: "show-b"
     } as unknown as NowPlayingStatus;
     expect(heldFromStatus(status)).toBeNull();
+  });
+});
+
+describe("deck bpm consumers", () => {
+  const pitchedStatus: NowPlayingStatus = {
+    modeState: "premade_active",
+    observation: {
+      sourceApp: "Rekordbox",
+      title: "Track B",
+      artist: null,
+      durationSeconds: 240,
+      observedAt: "2026-05-16T21:50:25.000Z",
+      playbackPositionSeconds: 127.25,
+      positionSource: "exact",
+      isPlaying: true
+    },
+    activeShowId: "show-b",
+    armedShow: null,
+    preparedAudio: null,
+    preparing: null,
+    providerAttempts: []
+  };
+
+  it("extrapolates the status observation at the deck's pitch rate", () => {
+    const seconds = resolveNowPlayingPlaybackSeconds(
+      pitchedStatus,
+      Date.parse("2026-05-16T21:50:27.500Z"),
+      1.025
+    );
+    expect(seconds).toBeCloseTo(127.25 + 2.5 * 1.025, 5);
+  });
+
+  it("paces premade cue speed with the deck's effective bpm", () => {
+    expect(deckCueBpm("now-playing", 123, 120)).toBe(123);
+  });
+
+  it("falls back to the show tempo without a usable deck bpm", () => {
+    expect(deckCueBpm("now-playing", null, 120)).toBe(120);
+    expect(deckCueBpm("now-playing", 0, 120)).toBe(120);
+    expect(deckCueBpm("library", 123, 120)).toBe(120);
+    expect(deckCueBpm(null, 123, 120)).toBe(120);
   });
 });

@@ -91,3 +91,24 @@ describe("cue jump handling", () => {
     expect(NOW_PLAYING_JUMP_SECONDS).toBe(0.25);
   });
 });
+
+describe("pitched-deck rate", () => {
+  it("folds the sample's age and projects at the deck's effective rate", () => {
+    // 123 bpm over a 120 bpm show: the deck burns source seconds 1.025x fast.
+    const anchor = anchorFromClockSample(exact({ positionSeconds: 20, ageMs: 100 }), 1000, 1.025);
+    expect(anchor.positionSeconds).toBeCloseTo(20.1025, 5);
+    expect(projectClockAnchor(anchor, 2000)).toBeCloseTo(21.1275, 5);
+  });
+
+  it("still holds the position when a pitched deck is paused", () => {
+    const anchor = anchorFromClockSample(exact({ positionSeconds: 20, playing: false, ageMs: 100 }), 1000, 1.025);
+    expect(anchor.positionSeconds).toBeCloseTo(20, 5);
+    expect(projectClockAnchor(anchor, 5000)).toBeCloseTo(20, 5);
+  });
+
+  it("defaults to real-time projection without a rate", () => {
+    const anchor = anchorFromClockSample(exact({ positionSeconds: 20, ageMs: 100 }), 1000);
+    expect(anchor.positionSeconds).toBeCloseTo(20.1, 5);
+    expect(projectClockAnchor(anchor, 2000)).toBeCloseTo(21.1, 5);
+  });
+});

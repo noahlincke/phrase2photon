@@ -61,7 +61,8 @@ export function heldClockStatus(
 
 export function resolveNowPlayingPlaybackSeconds(
   status: NowPlayingStatus | null,
-  nowEpochMs: number
+  nowEpochMs: number,
+  rate = 1
 ): number | null {
   const observation = status?.observation;
   if (!observation || observation.playbackPositionSeconds === null) {
@@ -75,9 +76,25 @@ export function resolveNowPlayingPlaybackSeconds(
     return observation.playbackPositionSeconds;
   }
   const elapsedSeconds = Math.max(0, (nowEpochMs - observedAtMs) / 1000);
-  const projected = observation.playbackPositionSeconds + elapsedSeconds;
+  const projected = observation.playbackPositionSeconds + elapsedSeconds * rate;
   const duration = resolveNowPlayingPlaybackDurationSeconds(status) ?? observation.durationSeconds;
   return Math.min(projected, duration);
+}
+
+/**
+ * The bpm a premade laser frame paces its cue speed with.
+ *
+ * A deck pitched away from the show's original tempo burns source seconds
+ * faster than the tempo map assumes, so the FB4 cue-speed channel should
+ * carry the deck's effective bpm — but only in now-playing mode with a deck
+ * sample to read; library playback already owns its transport.
+ */
+export function deckCueBpm(
+  sourceKind: LoadedSourceKind | null,
+  deckBpm: number | null,
+  showBpm: number
+): number {
+  return sourceKind === "now-playing" && deckBpm !== null && deckBpm > 0 ? deckBpm : showBpm;
 }
 
 export function resolveNowPlayingPlaybackDurationSeconds(

@@ -49,6 +49,7 @@ import {
   type NowPlayingPlayback
 } from "../nowPlaying/handoff.js";
 import {
+  deckCueBpm,
   heldClockStatus,
   heldFromStatus,
   isBrowserAudioTransportSource,
@@ -225,6 +226,7 @@ let nowPlayingPollTimer: number | null = null;
 let nowPlayingPollRequested = false;
 let nowPlayingPollInFlight = false;
 let nowPlayingClockAnchor: ClockSampleAnchor | null = null;
+let nowPlayingClockBpm: number | null = null;
 let nowPlayingClockInFlight = false;
 let nowPlayingClockTimer: number | null = null;
 let cachedTrackRefreshKey: string | null = null;
@@ -1036,7 +1038,12 @@ function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
   const beatFloat = Math.max(0, secondsToBeats(grid, secondsEff));
   const next = schedule[schedule.indexOf(playback.active) + 1];
   const frame = withLaserLook(
-    buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress, tempoAt(grid, secondsEff)),
+    buildShowLaserFrame(
+      loaded.show,
+      playback.active.phrase,
+      playback.phraseProgress,
+      deckCueBpm(loadedSourceKind, nowPlayingClockBpm, tempoAt(grid, secondsEff))
+    ),
     {
       phraseKind: phraseKindFor(playback.active.phrase),
       nextPhraseKind: next ? phraseKindFor(next.phrase) : null,
@@ -1079,7 +1086,12 @@ function currentShowFrame(): Fb4Dmx16Frame | null {
   }
   const grid = gridFor(loaded.show);
   const playback = playbackStateAt(schedule, seconds, grid);
-  return buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress, tempoAt(grid, seconds));
+  return buildShowLaserFrame(
+    loaded.show,
+    playback.active.phrase,
+    playback.phraseProgress,
+    deckCueBpm(loadedSourceKind, nowPlayingClockBpm, tempoAt(grid, seconds))
+  );
 }
 
 function activeAdvancingPhraseId(): string | null {
@@ -1128,13 +1140,13 @@ function currentPlaybackSeconds(): number | null {
     return projectClockAnchor(nowPlayingClockAnchor, Date.now());
   }
   if (nowPlayingClockIsExact(nowPlayingClockStatus())) {
-    return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now()) ?? 0;
+    return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now(), nowPlayingDeckRate()) ?? 0;
   }
   const follow = deckFollower.snapshot.follow;
   if (deckFollower.following && follow !== null) {
     return follow.positionSeconds;
   }
-  return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now()) ?? 0;
+  return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now(), nowPlayingDeckRate()) ?? 0;
 }
 
 function currentPlaybackDuration(): number | null {
@@ -1275,6 +1287,7 @@ function applyPreparedTrackSource(
   // The clock anchored the previous show's deck track; the new show waits for
   // its own sample instead of inheriting that position.
   nowPlayingClockAnchor = null;
+  nowPlayingClockBpm = null;
   refreshNowPlayingDriver();
 
   if (isBrowserAudioTransportSource(sourceKind)) {
@@ -1475,11 +1488,12 @@ async function pollNowPlayingClockLoop(): Promise<void> {
       // A sample the backend did not resolve to the loaded show describes
       // another deck track; its playhead must never drive this show.
       const ownsLoadedShow = sample.showId !== null && sample.showId === nowPlayingLoadedShowId();
-      nowPlayingClockAnchor = ownsLoadedShow && clockSampleIsExact(sample)
-        ? anchorFromClockSample(sample, Date.now())
-        : null;
+      const exact = ownsLoadedShow && clockSampleIsExact(sample) ? sample : null;
+      nowPlayingClockBpm = exact && exact.bpm !== null && exact.bpm > 0 ? exact.bpm : null;
+      nowPlayingClockAnchor = exact ? anchorFromClockSample(exact, Date.now(), nowPlayingDeckRate()) : null;
     } catch {
       nowPlayingClockAnchor = null;
+      nowPlayingClockBpm = null;
     } finally {
       nowPlayingClockInFlight = false;
     }
@@ -1488,6 +1502,19 @@ async function pollNowPlayingClockLoop(): Promise<void> {
     nowPlayingClockTimer = null;
     void pollNowPlayingClockLoop();
   }, NOW_PLAYING_CLOCK_POLL_MS);
+}
+
+/**
+ * Source seconds per wall second for the loaded show's deck.
+ *
+ * The deck's effective bpm over the show's original tempo is the pitch ratio;
+ * without a usable deck bpm the projection stays at real time.
+ */
+function nowPlayingDeckRate(): number {
+  const tempo = loadedSourceKind === "now-playing" ? loaded?.show.song.tempo ?? null : null;
+  return tempo !== null && tempo > 0 && nowPlayingClockBpm !== null
+    ? nowPlayingClockBpm / tempo
+    : 1;
 }
 
 /**
