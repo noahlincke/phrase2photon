@@ -29,6 +29,12 @@ STREAM_INTERVAL_MS = 20
 # How long after the last tick the stream's data still counts as fresh; past
 # this the clock endpoint stops reporting exact so the browser falls back.
 STREAM_STALE_SECONDS = 1.0
+# How often the watchdog checks for a probe that stopped producing ticks.
+STREAM_WATCHDOG_INTERVAL_SECONDS = 0.25
+# Grace between SIGTERM and SIGKILL when restarting a silent probe.
+STREAM_KILL_GRACE_SECONDS = 0.5
+# How long stop() waits for the pump thread before falling back to SIGKILL.
+STOP_JOIN_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -113,6 +119,10 @@ def _parse_stream_tick(tokens: list[str]) -> RekordboxStreamTick | None:
             sample_text, _, bpm_text = value.partition(",")
             sample = None if sample_text == "-1" else _int_or_none(sample_text)
             bpm = None if bpm_text in {"-1", ""} else _float_or_none(bpm_text)
+            # The probe prints BPM with %.3f, so an unreadable deck emits
+            # "-1.000" rather than "-1"; either way it means unknown.
+            if bpm is not None and bpm < 0:
+                bpm = None
             if sample_text != "-1" and sample is None:
                 return None
             samples[int(key[1]) - 1] = sample
@@ -157,6 +167,9 @@ class RekordboxMemoryStream:
         pause_fn: Callable[[float], None] | None = None,
         restart_backoff_seconds: float = 0.5,
         max_restart_backoff_seconds: float = 5.0,
+        watchdog_interval_seconds: float = STREAM_WATCHDOG_INTERVAL_SECONDS,
+        kill_grace_seconds: float = STREAM_KILL_GRACE_SECONDS,
+        stop_join_seconds: float = STOP_JOIN_SECONDS,
     ) -> None:
         self._interval_ms = interval_ms
         self._runner = runner
@@ -164,10 +177,14 @@ class RekordboxMemoryStream:
         self._clock = clock
         self._restart_backoff_seconds = restart_backoff_seconds
         self._max_restart_backoff_seconds = max_restart_backoff_seconds
+        self._watchdog_interval_seconds = watchdog_interval_seconds
+        self._kill_grace_seconds = kill_grace_seconds
+        self._stop_join_seconds = stop_join_seconds
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._pause_fn = pause_fn if pause_fn is not None else self._stop.wait
         self._thread: threading.Thread | None = None
+        self._watchdog: threading.Thread | None = None
         self._process: subprocess.Popen[str] | None = None
         self._spawned_at = 0.0
         self._current_backoff = restart_backoff_seconds
@@ -185,12 +202,18 @@ class RekordboxMemoryStream:
             self._thread = threading.Thread(
                 target=self._run, name="rekordbox-memory-stream", daemon=True
             )
+            self._watchdog = threading.Thread(
+                target=self._watch, name="rekordbox-memory-stream-watchdog", daemon=True
+            )
             self._thread.start()
+            self._watchdog.start()
 
     def stop(self) -> None:
         with self._lock:
             thread = self._thread
             self._thread = None
+            watchdog = self._watchdog
+            self._watchdog = None
         if thread is None:
             return
         self._stop.set()
@@ -198,7 +221,52 @@ class RekordboxMemoryStream:
             process = self._process
         if process is not None:
             process.terminate()
-        thread.join()
+        thread.join(timeout=self._stop_join_seconds)
+        if thread.is_alive():
+            # A probe can wedge so hard that even the terminated pipe never
+            # yields an EOF; SIGKILL so shutdown cannot hang here.
+            self._kill_current_process(kill=True)
+            thread.join(timeout=self._stop_join_seconds)
+        # A spawn already past its stop check can have published a fresh child
+        # after the snapshot above; terminate whatever is current now.
+        self._kill_current_process()
+        if watchdog is not None:
+            watchdog.join(timeout=self._stop_join_seconds)
+
+    def _kill_current_process(self, *, kill: bool = False) -> None:
+        with self._lock:
+            process = self._process
+        if process is None:
+            return
+        if kill:
+            process.kill()
+        else:
+            process.terminate()
+
+    def _watch(self) -> None:
+        """Kills a probe that stopped producing ticks so the pump can respawn.
+
+        A probe wedged mid-syscall never exits but stops printing ticks, which
+        would leave the pump thread blocked in readline() forever; ending the
+        process turns that readline into an EOF and the normal restart path
+        takes over.
+        """
+        while not self._stop.wait(self._watchdog_interval_seconds):
+            with self._lock:
+                process = self._process
+                reference = (
+                    self._spawned_at if self._last_tick_at is None else self._last_tick_at
+                )
+                stale = (
+                    process is not None
+                    and self._clock() - reference > STREAM_STALE_SECONDS
+                )
+            if not stale or process is None or process.poll() is not None:
+                continue
+            process.terminate()
+            time.sleep(self._kill_grace_seconds)
+            if process.poll() is None:
+                process.kill()
 
     def status(self) -> str | None:
         with self._lock:
@@ -314,8 +382,14 @@ class RekordboxMemoryStream:
             self._set_status("probe-failed:bash-missing")
             return None
         with self._lock:
+            if self._stop.is_set():
+                # A stop() that ran while this spawn was in flight never saw
+                # this child; terminate it here instead of leaking the probe.
+                process.terminate()
+                return None
             self._process = process
             self._spawned_at = self._clock()
+            self._last_tick_at = None
         self._set_status("exact")
         return process
 

@@ -2,6 +2,8 @@ import json
 import os
 import plistlib
 import subprocess
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,6 +49,7 @@ class FakeStreamProcess:
         self._lines = list(lines)
         self.stdout = self
         self.terminated = False
+        self.killed = False
         self.exit_code: int | None = None
 
     def readline(self) -> str:
@@ -64,6 +67,58 @@ class FakeStreamProcess:
     def terminate(self) -> None:
         self.terminated = True
 
+    def kill(self) -> None:
+        self.killed = True
+
+
+class WedgedStreamProcess:
+    """A probe that hangs in readline and shrugs off SIGTERM until SIGKILL."""
+
+    def __init__(self) -> None:
+        self.stdout = self
+        self.terminated = False
+        self.killed = False
+        self._killed = threading.Event()
+
+    def readline(self) -> str:
+        self._killed.wait()
+        return ""
+
+    def poll(self) -> int | None:
+        return None
+
+    def wait(self) -> int:
+        return -9
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self._killed.set()
+
+
+class HeldOpenStreamProcess(FakeStreamProcess):
+    """Emits its lines, then holds the pipe open like a live probe."""
+
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__(lines)
+        self._closed = threading.Event()
+
+    def readline(self) -> str:
+        if self._lines:
+            return self._lines.pop(0)
+        self._closed.wait()
+        return ""
+
+    def terminate(self) -> None:
+        super().terminate()
+        self._closed.set()
+
+    def kill(self) -> None:
+        super().kill()
+        self._closed.set()
+
 
 class FakePopenFactory:
     def __init__(self, processes: list[FakeStreamProcess]) -> None:
@@ -72,7 +127,27 @@ class FakePopenFactory:
 
     def __call__(self, argv: list[str], **_: object) -> FakeStreamProcess:
         self.calls.append(list(argv))
-        return self.processes.pop(0)
+        if self.processes:
+            return self.processes.pop(0)
+        # An exhausted queue keeps handing out quiet probes so a background
+        # stream thread started by a test never dies on an empty pop.
+        return FakeStreamProcess([])
+
+
+class GatedPopenFactory:
+    """Popen stand-in that holds one spawn in flight until it is released."""
+
+    def __init__(self, process: FakeStreamProcess) -> None:
+        self.process = process
+        self.called = threading.Event()
+        self.release = threading.Event()
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv: list[str], **_: object) -> FakeStreamProcess:
+        self.calls.append(list(argv))
+        self.called.set()
+        self.release.wait(timeout=5)
+        return self.process
 
 
 def _write_test_rekordbox_app(tmp_path: Path, version: str) -> Path:
@@ -97,20 +172,27 @@ def _stream(
     *,
     clock: FakeClock | None = None,
     restart_backoff_seconds: float = 0.5,
+    popen: object | None = None,
+    watchdog_interval_seconds: float = 0.02,
+    kill_grace_seconds: float = 0.01,
+    stop_join_seconds: float = 0.1,
 ) -> tuple[RekordboxMemoryStream, FakeClock, FakePopenFactory, FakeMemoryRunner]:
     clock = clock or FakeClock()
     runner = FakeMemoryRunner(
         binary_path=os.environ["P2P_REKORDBOX_APP"] + "/Contents/MacOS/rekordbox"
     )
-    popen = FakePopenFactory(processes)
+    factory = popen if popen is not None else FakePopenFactory(processes)
     stream = RekordboxMemoryStream(
         runner=runner,
-        popen=popen,
+        popen=factory,  # type: ignore[arg-type]
         clock=clock,
         pause_fn=lambda _seconds: None,
         restart_backoff_seconds=restart_backoff_seconds,
+        watchdog_interval_seconds=watchdog_interval_seconds,
+        kill_grace_seconds=kill_grace_seconds,
+        stop_join_seconds=stop_join_seconds,
     )
-    return stream, clock, popen, runner
+    return stream, clock, factory, runner  # type: ignore[return-value]
 
 
 TICK = (
@@ -137,6 +219,17 @@ def test_parse_stream_tick_master_invalid() -> None:
     assert tick is not None
     assert tick.master_deck is None
     assert tick.samples == (None, None, None, None)
+
+
+def test_parse_stream_tick_unreadable_bpm_is_none() -> None:
+    # The probe prints BPM with %.3f, so an unreadable deck emits "-1.000",
+    # which must read as "unknown" rather than a plausible-looking -1.0.
+    tick = rekordbox_stream.parse_rekordbox_stream_line(
+        "tick mono_ns=1 master=-1 d1=44100,-1.000 d2=-1,-1 d3=-1,-1 d4=-1,-1\n"
+    )
+    assert tick is not None
+    assert tick.samples[0] == 44100
+    assert tick.bpms[0] is None
 
 
 def test_parse_stream_track_line_with_spaces() -> None:
@@ -314,6 +407,62 @@ def test_stream_resets_backoff_after_long_lived_process() -> None:
     clock.advance(10.0)
     stream._pump()  # EOF after a long life resets the backoff before growing
     assert stream._current_backoff == 1.0
+
+
+def _wait_for(predicate, *, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_stream_restarts_a_wedged_probe_after_silence() -> None:
+    wedged = WedgedStreamProcess()
+    second = HeldOpenStreamProcess(
+        [
+            "track deck=1 title=Track A artist=A anlz=/a/ANLZ0000.DAT\n",
+            TICK.format(n=1, master=0, d1="44100,128.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"),
+        ]
+    )
+    stream, clock, popen, _runner = _stream([wedged, second])
+
+    stream.start()
+    try:
+        assert _wait_for(lambda: stream._process is not None)
+        clock.advance(rekordbox_stream.STREAM_STALE_SECONDS + 0.1)
+        assert _wait_for(lambda: len(popen.calls) >= 2)
+        assert wedged.killed  # SIGTERM alone cannot wake a wedged probe
+        assert _wait_for(lambda: stream.clock_payload()["status"] == "exact")
+        assert stream.clock_payload()["positionSeconds"] == pytest.approx(1.0)
+    finally:
+        stream.stop()
+
+
+def test_stop_kills_a_probe_that_ignores_termination() -> None:
+    wedged = WedgedStreamProcess()
+    stream, _clock, popen, _runner = _stream([wedged])
+
+    stream.start()
+    assert _wait_for(lambda: len(popen.calls) == 1)
+    stream.stop()  # must return even though the probe never yields an EOF
+    assert wedged.killed
+    assert stream._thread is None
+
+
+def test_stop_terminates_a_probe_spawned_during_shutdown() -> None:
+    late = FakeStreamProcess([])
+    factory = GatedPopenFactory(late)
+    stream, _clock, popen, _runner = _stream([], popen=factory)
+
+    stream.start()
+    assert factory.called.wait(timeout=5)
+    stream.stop()  # returns while the spawn is still in flight
+    factory.release.set()
+    assert _wait_for(lambda: late.terminated)
+    with stream._lock:
+        assert stream._process is None  # the fresh child never leaked
 
 
 def test_clock_route_serves_stream_payload() -> None:
