@@ -55,12 +55,12 @@ export function phraseKindFor(phrase: Phrase): PhraseKind {
 export function applyLaserLook(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
   let next = frame;
   const hit = dropHitBeats(ctx);
+  const ramp = hit === null && !preDropDip(ctx) ? rampWindow(ctx) : null;
   if (hit !== null) {
     next = applyDropHit(next, hit);
   } else if (preDropDip(ctx)) {
     next = withDimmer(next, 0);
   } else {
-    const ramp = rampWindow(ctx);
     if (ramp) {
       next = applyBuildRamp(next, ctx, ramp);
     }
@@ -69,7 +69,7 @@ export function applyLaserLook(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4
     }
   }
   if (ctx.phraseKind === "breakdown") {
-    next = applyBreakdownDrift(next, ctx);
+    next = applyBreakdownDrift(next, ctx, ramp === null);
   }
   return next;
 }
@@ -114,10 +114,6 @@ function preDropDip(ctx: LaserLookContext): boolean {
   return ctx.nextPhraseKind === "drop" && ctx.beatsInPhrase - ctx.beatsIntoPhrase <= 1;
 }
 
-function dimmerOf(frame: Fb4Dmx16Frame): number {
-  return frame.channels[frame.profile === "pangolin-fb4-dmx39" ? 16 : 4] ?? 0;
-}
-
 function withDimmer(frame: Fb4Dmx16Frame, dimmer: number): Fb4Dmx16Frame {
   const channels = [...frame.channels];
   channels[frame.profile === "pangolin-fb4-dmx39" ? 16 : 4] = clampByte(dimmer);
@@ -151,20 +147,18 @@ function rampWindow(ctx: LaserLookContext): RampWindow | null {
   return null;
 }
 
-/** The build ramp: size grows across the ramp window while the dimmer pulses faster. */
+/** The build ramp: size grows across the ramp window while the chops speed up. */
 function applyBuildRamp(frame: Fb4Dmx16Frame, ctx: LaserLookContext, ramp: RampWindow): Fb4Dmx16Frame {
   const progress = clamp01(ramp.beatsIntoRamp / Math.max(ramp.beatsInRamp, 1));
   const sized = withSize(frame, Math.round(BUILD_SIZE_FLOOR + (255 - BUILD_SIZE_FLOOR) * progress));
-  const intervalBeats = buildPulseIntervalBeats(ctx, ramp);
-  const peak = dimmerOf(sized);
-  const base = Math.round(peak * BUILD_PULSE_FLOOR);
-  const pulsePhase = (ramp.beatsIntoRamp % intervalBeats) / intervalBeats;
-  const pulsed = withDimmer(sized, Math.round(base + (peak - base) * (1 - pulsePhase)));
-  return finalBuildBars(ctx, ramp) ? whiteColour(pulsed) : pulsed;
+  const intervalBeats = buildChopIntervalBeats(ctx, ramp);
+  const chopPhase = (ramp.beatsIntoRamp % intervalBeats) / intervalBeats;
+  const chopped = withDimmer(sized, chopPhase < 0.5 ? 255 : 0);
+  return finalBuildBars(ctx, ramp) ? whiteColour(chopped) : chopped;
 }
 
-/** First half pulses on quarters, then eighths, and sixteenths for the last two bars. */
-function buildPulseIntervalBeats(ctx: LaserLookContext, ramp: RampWindow): number {
+/** First half chops on quarters, then eighths, and sixteenths for the last two bars. */
+function buildChopIntervalBeats(ctx: LaserLookContext, ramp: RampWindow): number {
   if (finalBuildBars(ctx, ramp)) {
     return SIXTEENTH_BEATS;
   }
@@ -178,40 +172,48 @@ function finalBuildBars(ctx: LaserLookContext, ramp: RampWindow): boolean {
 /** Sixty percent of full size at the start of the build, full size by the drop. */
 const BUILD_SIZE_FLOOR = Math.round(0.6 * 255);
 
-/** Where the build pulse decays to between hits, as a share of the phrase dimmer. */
-const BUILD_PULSE_FLOOR = 0.4;
-
 /** Forces the colour channels to white, the way the operator's White button does. */
 function whiteColour(frame: Fb4Dmx16Frame): Fb4Dmx16Frame {
   return buildFb4ColorModeFrame(frame, "white");
 }
 
-/** Downbeat accents: instant to the phrase peak, decaying to base over one beat. */
+/** Downbeat accents: instant to full size, decaying back to the phrase size over one beat. */
 function applyDownbeatAccent(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
   // Drop phrases accent every beat; groove phrases only on the bar downbeat.
   if (ctx.phraseKind !== "drop" && ctx.beatInBar !== 1) {
     return frame;
   }
-  const peak = dimmerOf(frame);
-  const base = Math.round(peak * ACCENT_FLOOR);
-  return withDimmer(frame, Math.round(base + (peak - base) * (1 - ctx.beatPhase)));
+  const base = sizeOf(frame);
+  return withSize(frame, Math.round(base + (255 - base) * (1 - ctx.beatPhase)));
 }
 
-/** Where an accent decays to between hits, as a share of the phrase dimmer. */
-const ACCENT_FLOOR = 0.5;
+function sizeOf(frame: Fb4Dmx16Frame): number {
+  return frame.profile === "pangolin-fb4-dmx39" ? frame.channels[19] ?? 0 : frame.channels[6] ?? 0;
+}
 
-/** Breakdowns keep the phrase's soft pool and dimmer but rotate at half speed. */
-function applyBreakdownDrift(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
+/**
+ * Breakdowns rotate at half speed and sit smaller; the dimmer stays full.
+ * The shrink yields to a pre-drop ramp, which needs the growing sizes.
+ */
+function applyBreakdownDrift(frame: Fb4Dmx16Frame, ctx: LaserLookContext, allowShrink: boolean): Fb4Dmx16Frame {
   const progress = clamp01(ctx.beatsIntoPhrase / Math.max(ctx.beatsInPhrase, 1));
   const angle = Math.round(progress * 0.5 * 255);
+  const scale = allowShrink ? BREAKDOWN_SIZE_SCALE : 1;
   const channels = [...frame.channels];
   if (frame.profile === "pangolin-fb4-dmx39") {
     writeByte16(channels, 23, angle);
+    writeByte16(channels, 19, Math.round((channels[19] ?? 0) * scale));
+    writeByte16(channels, 21, Math.round((channels[21] ?? 0) * scale));
   } else {
     channels[8] = angle;
+    channels[6] = clampByte(Math.round((channels[6] ?? 0) * scale));
+    channels[7] = clampByte(Math.round((channels[7] ?? 0) * scale));
   }
   return { ...frame, channels };
 }
+
+/** Breakdowns sit at three quarters of their phrase size. */
+const BREAKDOWN_SIZE_SCALE = 0.75;
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));

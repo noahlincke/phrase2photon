@@ -7,7 +7,6 @@ import {
 } from "../dmx/fb4CueCatalog.js";
 import { fb4ProjectorColorProfile, type Fb4LaserColorSlot } from "../dmx/fb4LaserColorProfile.js";
 import {
-  buildFb4BrightnessOverlayFrame,
   buildFb4ColorModeFrame,
   buildFb4ColorScrollFrame,
   buildFb4CueControlFrame,
@@ -30,7 +29,7 @@ import { escapeHtml } from "./html.js";
  * playback and rendering.
  *
  * The layout puts the controls an operator touches mid-set - enable, blackout,
- * brightness, colour - permanently in reach, and files calibration, the cue
+ * dimmer on/off, colour - permanently in reach, and files calibration, the cue
  * catalogue and the debug sweeps behind disclosures. Those are setup tools; a
  * wall of sixty-eight cue buttons is not something anyone needs open while
  * playing.
@@ -67,7 +66,7 @@ const STORAGE = {
   host: "p2p.dmx.host",
   universe: "p2p.dmx.universe",
   brightnessOverride: "p2p.dmx.brightnessOverride",
-  brightness: "p2p.dmx.brightness",
+  brightnessOn: "p2p.dmx.brightnessOn",
   beatLooks: "p2p.dmx.beatLooks",
   latencyMs: "p2p.dmx.latencyMs",
   geometryOverride: "p2p.dmx.geometryOverride",
@@ -164,8 +163,7 @@ export class LaserConsole {
     this.input("latencyMs").value = localStorage.getItem(STORAGE.latencyMs) || "0";
     this.element.latencyValue.textContent = this.input("latencyMs").value;
     this.input("rekordboxMute").checked = localStorage.getItem(STORAGE.rekordboxMute) === "true";
-    this.input("brightness").value = localStorage.getItem(STORAGE.brightness) || "64";
-    this.element.brightnessValue.textContent = this.input("brightness").value;
+    this.input("brightnessOn").checked = localStorage.getItem(STORAGE.brightnessOn) !== "false";
     this.input("geometryOverride").checked = localStorage.getItem(STORAGE.geometryOverride) === "true";
     this.input("holdForever").checked = localStorage.getItem(STORAGE.holdForever) === "true";
     this.input("catalogMode").checked = localStorage.getItem(STORAGE.catalogMode) === "true";
@@ -219,6 +217,7 @@ export class LaserConsole {
       void this.republish();
     });
     persistToggle("brightnessOverride", STORAGE.brightnessOverride);
+    persistToggle("brightnessOn", STORAGE.brightnessOn);
     persistToggle("beatLooks", STORAGE.beatLooks);
     persistToggle("geometryOverride", STORAGE.geometryOverride);
     persistToggle("rekordboxMute", STORAGE.rekordboxMute);
@@ -230,10 +229,6 @@ export class LaserConsole {
       void this.republish();
     });
 
-    this.input("brightness").addEventListener("input", () => {
-      this.element.brightnessValue.textContent = this.input("brightness").value;
-      localStorage.setItem(STORAGE.brightness, this.input("brightness").value);
-    });
     for (const slider of GEOMETRY_SLIDERS) {
       this.input(slider.key).addEventListener("input", () => {
         const value = this.input(slider.key).value;
@@ -257,13 +252,6 @@ export class LaserConsole {
     this.element.cueSweep.addEventListener("click", () => {
       void this.runSequence(
         [1, 2, 3, 4, 5, 6, 7, 8].map((cue) => this.named(buildFb4CueFrame(cue, this.deps.currentBpm())))
-      );
-    });
-    this.element.brightnessSweep.addEventListener("click", () => {
-      void this.runSequence(
-        [0, 64, 128, 192, 255, 128].map((dimmer) =>
-          buildFb4BrightnessOverlayFrame(dimmer, this.deps.currentBpm())
-        )
       );
     });
     this.element.colorOriginal.addEventListener("click", () => {
@@ -495,7 +483,7 @@ export class LaserConsole {
   }
 
   private setSequenceButtonsDisabled(disabled: boolean): void {
-    for (const name of ["blackout", "cueOne", "zoneFrame", "cueSweep", "brightnessSweep", "colorOriginal", "colorWhite"]) {
+    for (const name of ["blackout", "cueOne", "zoneFrame", "cueSweep", "colorOriginal", "colorWhite"]) {
       (this.element[name] as HTMLButtonElement).disabled = disabled;
     }
   }
@@ -509,13 +497,13 @@ export class LaserConsole {
 
   // ----------------------------------------------------------- frame tweaks
 
+  /** Full-or-off dimmer override: the FB4 owns brightness, we only switch. */
   private applyBrightness(frame: Fb4Dmx16Frame): Fb4Dmx16Frame {
     if (!this.input("brightnessOverride").checked) {
       return frame;
     }
     const channels = [...frame.channels];
-    const value = Number.parseInt(this.input("brightness").value, 10) || 0;
-    channels[frame.profile === "pangolin-fb4-dmx39" ? 16 : 4] = value;
+    channels[frame.profile === "pangolin-fb4-dmx39" ? 16 : 4] = this.input("brightnessOn").checked ? 255 : 0;
     return { ...frame, channels };
   }
 
@@ -1107,11 +1095,11 @@ const TEMPLATE = /* html */ `
     </div>
     <label class="toggle-row">
       <input data-laser="brightnessOverride" type="checkbox" />
-      <span>Override brightness</span>
+      <span>Override dimmer</span>
     </label>
-    <label class="field-row">
-      <span>Brightness <strong data-laser="brightnessValue">64</strong></span>
-      <input data-laser="brightness" type="range" min="0" max="255" step="1" value="64" />
+    <label class="toggle-row">
+      <input data-laser="brightnessOn" type="checkbox" />
+      <span>Dimmer on (unchecked = blackout)</span>
     </label>
     <div class="swatch-row">
       ${SWATCHES.map(
@@ -1222,7 +1210,6 @@ const TEMPLATE = /* html */ `
       <button data-laser="zoneFrame" type="button">Square</button>
       <button data-laser="cueOne" type="button">Circle</button>
       <button data-laser="cueSweep" type="button">Cue sweep</button>
-      <button data-laser="brightnessSweep" type="button">Brightness sweep</button>
       <button data-laser="colorOriginal" type="button">Original colour</button>
       <button data-laser="colorWhite" type="button">White</button>
     </div>

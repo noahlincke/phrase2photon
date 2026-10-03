@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { buildArtDmxPacket } from "../dmx/artnet.js";
 import {
   buildFb4LegacyCueFrame,
-  buildFb4BrightnessOverlayFrame,
   buildFb4ColorModeFrame,
   buildFb4ColorScrollFrame,
   buildFb4CueControlFrame,
@@ -86,15 +85,16 @@ describe("FB4 DMX16 mapping", () => {
     expect(frame.channels[1]).toBe(pageIndexValue(frame.page));
     expect(frame.channels[2]).toBe(cueIndexValue(frame.cue));
     expect(frame.channels[3]).toBe(122);
-    expect(frame.channels[4]).toBe(intensityToDimmer(0.9));
-    expect(frame.channels[6]).toBeGreaterThanOrEqual(168);
+    expect(frame.channels[4]).toBe(255);
+    expect(frame.channels[6]).toBeGreaterThanOrEqual(150);
+    expect(frame.channels[6]).toBeLessThanOrEqual(255);
     expect(frame.cueShape).not.toBeNull();
     expect(frame.colorLabel).toBe("Yellow-Lime");
     expect(frame.graphicsColor).toBe("#d9ff00");
     expect(frame.channels[14]).toBe(84);
   });
 
-  it("keeps low-energy show frames larger, dimmer, and intentionally color matched", () => {
+  it("keeps low-energy show frames smaller but full-dimmer, and intentionally color matched", () => {
     const frame = buildFb4Dmx16Frame({
       show,
       phrase: show.phrases[0],
@@ -102,9 +102,10 @@ describe("FB4 DMX16 mapping", () => {
       phraseProgress: 0
     });
 
-    expect(frame.channels[4]).toBeGreaterThanOrEqual(100);
-    expect(frame.channels[6]).toBeGreaterThan(160);
-    expect(frame.channels[7]).toBeGreaterThan(160);
+    expect(frame.channels[4]).toBe(255);
+    expect(frame.channels[6]).toBeGreaterThan(150);
+    expect(frame.channels[6]).toBeLessThanOrEqual(200);
+    expect(frame.channels[7]).toBe(frame.channels[6]);
     expect(frame.colorLabel).toBe("Cyan");
     expect(frame.graphicsColor).toBe("#7dd3fc");
     expect(frame.channels[14]).toBe(118);
@@ -308,25 +309,24 @@ describe("FB4 DMX16 mapping", () => {
     expect(seen.some((palette, index) => index > 0 && palette !== seen[index - 1])).toBe(true);
   });
 
-  it("keeps sub-100 dimmer values reserved for near-black fade levels", () => {
+  it("runs the dimmer full or off only, never mid-range", () => {
     expect(intensityToDimmer(0)).toBe(0);
-    expect(intensityToDimmer(0.05)).toBeLessThan(100);
-    expect(intensityToDimmer(0.12)).toBeGreaterThanOrEqual(100);
-    expect(intensityToDimmer(0.9)).toBeGreaterThan(230);
+    expect(intensityToDimmer(0.05)).toBe(0);
+    expect(intensityToDimmer(0.1)).toBe(0);
+    expect(intensityToDimmer(0.12)).toBe(255);
+    expect(intensityToDimmer(0.9)).toBe(255);
   });
 
   it("builds operator cue and overlay frames for fixture checks", () => {
     const blackout = buildFb4CueControlFrame("blackout", 122);
     const cue = buildFb4CueFrame(8, 122);
-    const dimmer = buildFb4BrightnessOverlayFrame(64, 122);
 
     expect(blackout.channels.every((value) => value === 0)).toBe(true);
     expect(cue.profile).toBe("pangolin-fb4-dmx39");
     expect(cue.channels[0]).toBe(251);
     expect(cue.channels[13]).toBe(1);
     expect(cue.channels[14]).toBe(8);
-    expect(dimmer.profile).toBe("pangolin-fb4-dmx39");
-    expect(dimmer.channels[16]).toBe(64);
+    expect(cue.channels[16]).toBe(255);
   });
 
   it("uses the FB4 39-channel profile when a show phrase explicitly targets a catalog cue", () => {
@@ -493,6 +493,7 @@ describe("FB4 DMX16 mapping", () => {
     expect(frame.cue).toBe(4);
     expect(frame.cueShape).toBe("square");
     expect(frame.channels[2]).toBe(cueIndexValue(4));
+    expect(frame.channels[4]).toBe(255);
     expect(frame.channels[6]).toBe(255);
     expect(frame.channels[7]).toBe(255);
     expect(frame.channels[9]).toBe(128);

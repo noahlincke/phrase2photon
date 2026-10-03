@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyLaserLook, latencyShiftedBeats, type LaserLookContext } from "../dmx/laserLooks.js";
-import { buildFb4Dmx16Frame, intensityToDimmer, type Fb4Dmx16Frame } from "../dmx/fb4Dmx16.js";
+import { buildFb4Dmx16Frame, type Fb4Dmx16Frame } from "../dmx/fb4Dmx16.js";
 import type { PhraseKind } from "../audio/structure.js";
 import type { DmxLaserCue, Phrase, ShowPackage } from "../show/types.js";
 
@@ -49,6 +49,25 @@ const show: ShowPackage = {
 function baseFrame(kind: PhraseKind, phraseProgress = 0): Fb4Dmx16Frame {
   const phrase = show.phrases.find((entry) => entry.phrase_id === `phrase_${kind}`)!;
   return buildFb4Dmx16Frame({ show, phrase, lightingCue: null, phraseProgress });
+}
+
+/** The same phrase forced onto the 39-channel profile through an out-of-range cue. */
+function baseFrameWith39(kind: PhraseKind, phraseProgress = 0): Fb4Dmx16Frame {
+  const phrase = show.phrases.find((entry) => entry.phrase_id === `phrase_${kind}`)!;
+  return buildFb4Dmx16Frame({
+    show,
+    phrase,
+    lightingCue: null,
+    laserCue: {
+      cue_id: `cue_${kind}`,
+      phrase_id: phrase.phrase_id,
+      fixture_group: "laser_main",
+      mode: "cue",
+      parameter_overrides: { page: 1, cue: 60 }
+    },
+    allowExperimental39Channel: true,
+    phraseProgress
+  });
 }
 
 function context(overrides: Partial<LaserLookContext>): LaserLookContext {
@@ -103,27 +122,29 @@ describe("laser looks", () => {
     expect(off.channels[4]).toBe(0);
 
     const late = looked("drop", { beatsIntoPhrase: 9, beatInBar: 2, beatPhase: 0.5 });
-    expect(late.channels[4]).toBe(Math.round(128 + (intensityToDimmer(1) - 128) * 0.5));
+    expect(late.channels[4]).toBe(255);
   });
 
-  it("ramps build size up and pulses the dimmer faster toward the drop", () => {
+  it("ramps build size up and chops the dimmer faster toward the drop", () => {
     const start = looked("build", { beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1 });
     expect(start.channels[6]).toBe(153);
-    expect(start.channels[4]).toBe(intensityToDimmer(0.72));
+    expect(start.channels[4]).toBe(255);
 
     const middle = looked("build", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
     expect(middle.channels[6]).toBe(204);
 
-    // First half: quarter-note pulses decay over the whole beat.
-    const quarter = looked("build", { beatsIntoPhrase: 2.5, beatPhase: 0.5, beatInBar: 3 });
-    const peak = intensityToDimmer(0.72);
-    const base = Math.round(peak * 0.4);
-    expect(quarter.channels[4]).toBe(Math.round(base + (peak - base) * 0.5));
+    // First half: quarter-note chops, full or off, on half of each beat.
+    const quarterOn = looked("build", { beatsIntoPhrase: 2.25, beatPhase: 0.25, beatInBar: 3 });
+    expect(quarterOn.channels[4]).toBe(255);
+    const quarterOff = looked("build", { beatsIntoPhrase: 2.5, beatPhase: 0.5, beatInBar: 3 });
+    expect(quarterOff.channels[4]).toBe(0);
 
-    // Last two bars: sixteenth-note pulses, so mid-interval lands halfway between
-    // sixteenths, not halfway between quarters.
-    const sixteenth = looked("build", { beatsIntoPhrase: 24.625, beatPhase: 0.625, beatInBar: 3 });
-    expect(sixteenth.channels[4]).toBe(Math.round(base + (peak - base) * 0.5));
+    // Last two bars: sixteenth-note chops, so the on/off boundary moves from
+    // the beat midpoint to the sixteenth midpoint.
+    const sixteenthOn = looked("build", { beatsIntoPhrase: 24.5, beatPhase: 0.5, beatInBar: 3 });
+    expect(sixteenthOn.channels[4]).toBe(255);
+    const sixteenthOff = looked("build", { beatsIntoPhrase: 24.625, beatPhase: 0.625, beatInBar: 3 });
+    expect(sixteenthOff.channels[4]).toBe(0);
 
     // The last two bars go white.
     const white = looked("build", { beatsIntoPhrase: 25, beatPhase: 0, beatInBar: 2 });
@@ -134,11 +155,12 @@ describe("laser looks", () => {
   });
 
   it("ramps the last eight bars of a breakdown that leads into a drop", () => {
-    // A 16-bar breakdown: the ramp covers beats 32-64 only.
+    // A 16-bar breakdown: the ramp covers beats 32-64 only. Outside the ramp
+    // the breakdown sits at its own shrunk size.
     const early = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
-    expect(early.channels[6]).toBe(198);
+    expect(early.channels[6]).toBe(137);
     const justBefore = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 31.5, beatPhase: 0.5, beatInBar: 4 });
-    expect(justBefore.channels[6]).toBe(198);
+    expect(justBefore.channels[6]).toBe(137);
 
     const rampStart = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 32, beatPhase: 0, beatInBar: 1 });
     expect(rampStart.channels[6]).toBe(153);
@@ -147,11 +169,11 @@ describe("laser looks", () => {
     const late = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56, beatPhase: 0, beatInBar: 1 });
     expect(late.channels[6]).toBe(230);
 
-    // Last two bars of the ramp: sixteenth pulses and white.
-    const peak = intensityToDimmer(0.3);
-    const base = Math.round(peak * 0.4);
-    const sixteenth = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56.625, beatPhase: 0.625, beatInBar: 1 });
-    expect(sixteenth.channels[4]).toBe(Math.round(base + (peak - base) * 0.5));
+    // Last two bars of the ramp: sixteenth chops, on at the grid, off mid-grid.
+    const sixteenthOn = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56.5, beatPhase: 0.5, beatInBar: 1 });
+    expect(sixteenthOn.channels[4]).toBe(255);
+    const sixteenthOff = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56.625, beatPhase: 0.625, beatInBar: 1 });
+    expect(sixteenthOff.channels[4]).toBe(0);
     const white = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 57, beatPhase: 0, beatInBar: 2 });
     expect(white.channels[14]).toBe(240);
     expect(white.colorLabel).toBe("White");
@@ -165,33 +187,39 @@ describe("laser looks", () => {
 
   it("leaves a breakdown that leads into a groove un-ramped", () => {
     const insideWindow = looked("breakdown", { nextPhraseKind: "groove", beatsInPhrase: 64, beatsIntoPhrase: 56, beatPhase: 0, beatInBar: 1 });
-    expect(insideWindow.channels[6]).toBe(198);
+    expect(insideWindow.channels[6]).toBe(137);
     expect(insideWindow.channels[14]).toBe(84);
   });
 
-  it("accents bar downbeats in groove and every beat in drop", () => {
-    const peak = intensityToDimmer(0.54);
-    const base = Math.round(peak * 0.5);
+  it("pulses size on bar downbeats in groove and every beat in drop", () => {
+    // Groove dynamics 0.54 sizes the phrase frame at 207.
+    const baseSize = Math.round(150 + 0.54 * 105);
     const downbeat = looked("groove", { beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1 });
-    expect(downbeat.channels[4]).toBe(peak);
+    expect(downbeat.channels[4]).toBe(255);
+    expect(downbeat.channels[6]).toBe(255);
     const decayed = looked("groove", { beatsIntoPhrase: 0.9, beatPhase: 0.9, beatInBar: 1 });
-    expect(decayed.channels[4]).toBe(Math.round(base + (peak - base) * 0.1));
+    expect(decayed.channels[4]).toBe(255);
+    expect(decayed.channels[6]).toBe(Math.round(baseSize + (255 - baseSize) * 0.1));
     const offBeat = looked("groove", { beatsIntoPhrase: 1, beatPhase: 0, beatInBar: 2 });
-    expect(offBeat.channels[4]).toBe(peak);
+    expect(offBeat.channels[6]).toBe(baseSize);
 
-    const dropPeak = intensityToDimmer(1);
-    const dropBase = Math.round(dropPeak * 0.5);
+    // Drop accents every beat; its phrase size is already full.
     const dropBeat = looked("drop", { beatsIntoPhrase: 5, beatPhase: 0.5, beatInBar: 2 });
-    expect(dropBeat.channels[4]).toBe(Math.round(dropBase + (dropPeak - dropBase) * 0.5));
+    expect(dropBeat.channels[4]).toBe(255);
+    expect(dropBeat.channels[6]).toBe(255);
   });
 
-  it("leaves breakdown dimmer and pool alone but halves the angle ramp", () => {
+  it("keeps breakdown full, halves the angle ramp and sits smaller", () => {
     const breakdown = looked("breakdown", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
-    expect(breakdown.channels[4]).toBe(intensityToDimmer(0.3));
+    expect(breakdown.channels[4]).toBe(255);
     expect(breakdown.channels[8]).toBe(64);
+    // Phrase size 182, shrunk to three quarters.
+    expect(breakdown.channels[6]).toBe(137);
 
     const groove = looked("groove", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 }, 0.5);
     expect(groove.channels[8]).toBe(128);
+    // The bar downbeat accent bumps size straight to full.
+    expect(groove.channels[6]).toBe(255);
   });
 
   it("drives the 39-channel pairs for size, dimmer and angle", () => {
@@ -304,5 +332,91 @@ describe("mid-phrase entry", () => {
       beatInBar: 4
     });
     expect(dip.channels[4]).toBe(0);
+  });
+});
+
+describe("dimmer is always full or off", () => {
+  const dimmerIndex = (frame: Fb4Dmx16Frame): number =>
+    frame.profile === "pangolin-fb4-dmx39" ? 16 : 4;
+  const sizeIndex = (frame: Fb4Dmx16Frame): number =>
+    frame.profile === "pangolin-fb4-dmx39" ? 19 : 6;
+  const nextKinds: (PhraseKind | null)[] = [null, "drop", "groove"];
+  const beatPhases = [0, 0.25, 0.5, 0.75];
+  const beatsInBar = [1, 3];
+
+  /** Every look over every phrase kind and beat position keeps the switch. */
+  it("keeps the dimmer at 0 or 255 across every look and context", () => {
+    let frames = 0;
+    for (const kind of KIND_ORDER) {
+      for (const nextKind of nextKinds) {
+        for (const dropHit of [null, 0.2, 1.25, 3.5]) {
+          for (let beatsIntoPhrase = 0; beatsIntoPhrase <= 64; beatsIntoPhrase += 0.125) {
+            const beatInBar = beatsInBar[Math.floor(beatsIntoPhrase) % 2];
+            const beatPhase = beatPhases[Math.round((beatsIntoPhrase % 1) * 4)];
+            for (const allow39 of [false, true]) {
+              const base = baseFrame(kind, 0.5);
+              const frame = applyLaserLook(base, context({
+                phraseKind: kind,
+                nextPhraseKind: nextKind,
+                beatsIntoPhrase,
+                beatInBar,
+                beatPhase,
+                dropHitBeats: dropHit
+              }));
+              const looked39 = allow39
+                ? applyLaserLook(
+                  baseFrameWith39(kind),
+                  context({
+                    phraseKind: kind,
+                    nextPhraseKind: nextKind,
+                    beatsIntoPhrase,
+                    beatInBar,
+                    beatPhase,
+                    dropHitBeats: dropHit
+                  })
+                )
+                : null;
+              for (const candidate of looked39 ? [frame, looked39] : [frame]) {
+                const value = candidate.channels[dimmerIndex(candidate)];
+                if (value !== 0 && value !== 255) {
+                  throw new Error(
+                    `dimmer ${value} at kind=${kind} next=${nextKind} hit=${dropHit} beat=${beatsIntoPhrase} phase=${beatPhase} bar=${beatInBar} profile=${candidate.profile}`
+                  );
+                }
+                const size = candidate.channels[sizeIndex(candidate)];
+                if (size < 0 || size > 255) {
+                  throw new Error(`size ${size} out of envelope at kind=${kind} beat=${beatsIntoPhrase}`);
+                }
+                frames += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(frames).toBeGreaterThan(10000);
+  });
+
+  /** Silence-sized phrases go dark; lit ones are full, sized by energy. */
+  it("keeps the show frames themselves on the switch", () => {
+    for (const kind of KIND_ORDER) {
+      for (const allow39 of [false, true]) {
+        for (const phraseProgress of [0, 0.25, 0.5, 0.75, 1]) {
+          const frame = allow39 ? baseFrameWith39(kind, phraseProgress) : baseFrame(kind, phraseProgress);
+          const value = frame.channels[dimmerIndex(frame)];
+          expect([0, 255]).toContain(value);
+          const size = frame.channels[sizeIndex(frame)];
+          expect(size).toBeGreaterThanOrEqual(150);
+          expect(size).toBeLessThanOrEqual(255);
+        }
+      }
+    }
+    // Silence: a lighting cue at zero intensity keeps the dimmer dark.
+    const silentPhrase = {
+      ...show.phrases[1],
+      energy: { level: "low" as const, dynamics: 0, tension: 0 }
+    };
+    const silent = buildFb4Dmx16Frame({ show, phrase: silentPhrase, lightingCue: null, phraseProgress: 0 });
+    expect(silent.channels[4]).toBe(0);
   });
 });

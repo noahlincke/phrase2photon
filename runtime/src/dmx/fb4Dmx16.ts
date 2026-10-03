@@ -68,8 +68,8 @@ export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
   const pageNumber = explicitTarget?.page ?? fallbackTarget.page;
   const cueNumber = explicitTarget?.cue ?? fallbackTarget.cue;
   const intensity = input.lightingCue?.look.intensity ?? input.phrase.energy.dynamics;
-  const density = densityForComposition(input.phrase.visual_look.composition);
-  const size = Math.round(168 + density * 48);
+  // Energy used to dim; now it sizes: low energy stays small, peak fills out.
+  const size = Math.round(150 + Math.max(0, Math.min(1, intensity)) * 105);
   const angle = Math.round(input.phraseProgress * 255);
   const color = fb4ColorForPalette(palette);
   const cueDescription = describeFb4Cue(pageNumber, cueNumber);
@@ -146,7 +146,7 @@ export function buildFb4CueControlFrame(kind: Fb4CueControlKind, bpm = 122): Fb4
     palette: "cue-1",
     colorMode: "original",
     label: "Cue 1",
-    channels: baseCueChannels({ bpm, pageNumber: 1, cueNumber: 1, dimmer: 192, color: 0 })
+    channels: baseCueChannels({ bpm, pageNumber: 1, cueNumber: 1, dimmer: 255, color: 0 })
   });
 }
 
@@ -215,7 +215,7 @@ export function buildFb4CueFrame(cueNumber: number, bpm = 122, pageNumber = 1): 
       bpm,
       pageNumber,
       cueNumber,
-      dimmer: 192,
+      dimmer: 255,
       zoom: 128,
       sizeX: 160,
       sizeY: 160,
@@ -234,12 +234,12 @@ export function buildFb4LegacyCueFrame(cueNumber: number, bpm = 122, pageNumber 
     palette: `cue-${pageNumber}-${cueNumber}`,
     colorMode: "original",
     label: `P${pageNumber} C${cueNumber}`,
-    channels: baseCueChannels({ bpm, pageNumber, cueNumber, dimmer: 192, color: 0 })
+    channels: baseCueChannels({ bpm, pageNumber, cueNumber, dimmer: 255, color: 0 })
   });
 }
 
 export function buildFb4ZoneFrame(bpm = 122): Fb4Dmx16Frame {
-  const channels = baseCueChannels({ bpm, pageNumber: 1, cueNumber: 4, dimmer: 96, color: 240 });
+  const channels = baseCueChannels({ bpm, pageNumber: 1, cueNumber: 4, dimmer: 255, color: 240 });
   channels[5] = 128;
   channels[6] = 255;
   channels[7] = 255;
@@ -254,29 +254,6 @@ export function buildFb4ZoneFrame(bpm = 122): Fb4Dmx16Frame {
     colorMode: "white",
     label: "Square",
     channels
-  });
-}
-
-export function buildFb4BrightnessOverlayFrame(dimmer: number, bpm = 122): Fb4Dmx16Frame {
-  return withFrameMeta({
-    profile: "pangolin-fb4-dmx39",
-    palette: `dimmer-${dimmer}`,
-    colorMode: "original",
-    label: `Dimmer ${dimmer}`,
-    channels: baseCueChannels39({
-      bpm,
-      pageNumber: 1,
-      cueNumber: 1,
-      dimmer,
-      zoom: 128,
-      sizeX: 160,
-      sizeY: 160,
-      angle: 128,
-      positionX: 128,
-      positionY: 128,
-      scan: 240,
-      color: { mode: "original", label: "Original color", value: 0, graphicsColor: "#f8fafc" }
-    })
   });
 }
 
@@ -354,16 +331,6 @@ export function selectVariedFb4Palette(input: Fb4PaletteVarietyInput): string {
 
   const alternatives = paletteIds.filter((paletteId) => paletteId !== input.currentPalette);
   return alternatives[positiveModulo(stableHash(`${input.eventKey}|switch`), alternatives.length)] ?? input.currentPalette;
-}
-
-function densityForComposition(composition: string): number {
-  if (composition.includes("dense") || composition.includes("full")) {
-    return 1;
-  }
-  if (composition.includes("medium") || composition.includes("open")) {
-    return 0.62;
-  }
-  return 0.32;
 }
 
 function baseCueChannels(input: { bpm: number; pageNumber: number; cueNumber: number; dimmer: number; color: number }): number[] {
@@ -660,13 +627,15 @@ function positiveModulo(value: number, divisor: number): number {
   return ((value % divisor) + divisor) % divisor;
 }
 
+/**
+ * The FB4's own Master Brightness already sets overall brightness, and on this
+ * laser a mid-range dimmer starves the RGB diodes (white collapses to red or
+ * purple), so the DMX dimmer is a switch: the old near-black fade band stays
+ * dark, everything else is full.
+ */
 export function intensityToDimmer(intensity: number): number {
   const normalized = Math.max(0, Math.min(1, intensity));
-  if (normalized <= 0.1) {
-    return clampByte(Math.round((normalized / 0.1) * 100));
-  }
-  const lifted = (normalized - 0.1) / 0.9;
-  return clampByte(100 + Math.round(Math.pow(lifted, 0.55) * 155));
+  return normalized <= 0.1 ? 0 : 255;
 }
 
 function cueFromChannels(profile: Fb4Dmx16Frame["profile"], channels: number[]): number {
