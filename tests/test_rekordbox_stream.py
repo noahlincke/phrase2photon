@@ -200,6 +200,23 @@ TICK = (
 )
 
 
+def _play_tick(
+    stream: RekordboxMemoryStream,
+    clock: FakeClock,
+    *,
+    master: int = -1,
+    d1: str = "-1,-1",
+    d2: str = "-1,-1",
+    d3: str = "-1,-1",
+    d4: str = "-1,-1",
+) -> None:
+    """Feeds one stream tick 50 ms after the previous one."""
+    clock.advance(0.05)
+    stream._apply_line(
+        TICK.format(n=int(clock.now * 1e9), master=master, d1=d1, d2=d2, d3=d3, d4=d4)
+    )
+
+
 def test_parse_stream_tick_line() -> None:
     tick = rekordbox_stream.parse_rekordbox_stream_line(
         "tick mono_ns=1234 master=2 d1=44100,128.000 d2=-1,-1 d3=0,120.500 d4=-1,-1\n"
@@ -313,6 +330,96 @@ def test_active_deck_none_without_match() -> None:
     stream._apply_line(TICK.format(n=1, master=-1, d1="0,0.000", d2="-1,-1", d3="-1,-1", d4="-1,-1"))
     assert stream.clock_payload(observation_title="Other")["deck"] is None
     assert stream.clock_payload()["deck"] is None
+
+
+def test_sticky_selects_first_playing_deck() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    _play_tick(stream, clock, d1="0,128.000")  # a first sighting carries no motion
+    _play_tick(stream, clock, d1="2205,128.000")
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_sticky_blend_keeps_current_then_switches_when_it_stops() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    for step in range(20):  # deck 1 plays alone
+        _play_tick(stream, clock, d1=f"{step * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+    for step in range(20, 40):  # deck 2 joins: the blend keeps deck 1
+        _play_tick(
+            stream, clock, d1=f"{step * 2205},128.000", d2=f"{(step - 20) * 2205},128.000"
+        )
+    assert stream.clock_payload()["deck"] == 1
+    for step in range(40, 45):  # deck 1 pauses: still inside the stop window
+        _play_tick(
+            stream, clock, d1=f"{39 * 2205},128.000", d2=f"{(step - 20) * 2205},128.000"
+        )
+    assert stream.clock_payload()["deck"] == 1
+    for step in range(45, 49):  # past the window, the running deck takes over
+        _play_tick(
+            stream, clock, d1=f"{39 * 2205},128.000", d2=f"{(step - 20) * 2205},128.000"
+        )
+    assert stream.clock_payload()["deck"] == 2
+
+
+def test_sticky_loop_on_air_deck_never_switches() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    loop = (0, 2205, 4410, 6615)
+    for step in range(40):  # deck 1 loops while deck 2 plays straight through
+        _play_tick(stream, clock, d1=f"{loop[step % 4]},128.000", d2=f"{step * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_sticky_hot_cue_jump_keeps_on_air_deck() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    for step in range(10):
+        _play_tick(stream, clock, d1=f"{step * 2205},128.000", d2=f"{step * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+    for step in range(10, 30):  # deck 1 hot-cues 30 s forward mid-blend
+        _play_tick(
+            stream,
+            clock,
+            d1=f"{step * 2205 + 1323000},128.000",
+            d2=f"{step * 2205},128.000",
+        )
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_sticky_pause_keeps_deck_and_resume_stays() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    for step in range(10):
+        _play_tick(stream, clock, d1=f"{step * 2205},128.000")
+    for step in range(10, 20):  # paused well past the stop window, nothing else playing
+        _play_tick(stream, clock, d1=f"{9 * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+    for step in range(20, 30):  # resume lands back on the same deck
+        _play_tick(stream, clock, d1=f"{(step - 10) * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_sticky_master_deck_still_wins() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    stream._apply_line("track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n")
+    for step in range(6):  # deck 2 is the one actually playing
+        _play_tick(stream, clock, master=0, d1="44100,128.000", d2=f"{step * 2205},128.000")
+    assert stream.clock_payload()["deck"] == 1
+
+
+def test_select_playing_deck_switches_to_longest_playing() -> None:
+    stopped = rekordbox_stream.DeckMotion(
+        last_motion_at=1.0, playing_since=0.5, last_position=100
+    )
+    playing = rekordbox_stream.DeckMotion(
+        last_motion_at=2.4, playing_since=1.0, last_position=200
+    )
+    assert rekordbox_stream._select_playing_deck(2.4, 1, [stopped, playing]) == 2
+    assert rekordbox_stream._select_playing_deck(2.4, None, [stopped, playing]) == 2
+    tied_a = rekordbox_stream.DeckMotion(
+        last_motion_at=2.4, playing_since=1.5, last_position=100
+    )
+    tied_b = rekordbox_stream.DeckMotion(
+        last_motion_at=2.4, playing_since=1.5, last_position=200
+    )
+    assert rekordbox_stream._select_playing_deck(2.4, None, [tied_a, tied_b]) == 1
 
 
 def test_clock_payload_playing_and_age() -> None:

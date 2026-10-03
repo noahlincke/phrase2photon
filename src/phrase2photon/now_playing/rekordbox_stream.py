@@ -35,6 +35,12 @@ STREAM_WATCHDOG_INTERVAL_SECONDS = 0.25
 STREAM_KILL_GRACE_SECONDS = 0.5
 # How long stop() waits for the pump thread before falling back to SIGKILL.
 STOP_JOIN_SECONDS = 2.0
+# A deck whose playhead moved within this window counts as playing.
+PLAYING_MOTION_SECONDS = 0.25
+# A deck whose playhead has not moved for at least this long counts as
+# stopped; the gap between the two windows rides out a missed tick without
+# flapping the on-air selection.
+STOPPED_AFTER_SECONDS = 0.3
 
 
 @dataclass(frozen=True)
@@ -67,6 +73,80 @@ class RekordboxStreamDeckSample:
         if self.previous_sample_position is None:
             return self.sample_position > 0
         return self.sample_position != self.previous_sample_position
+
+
+@dataclass(frozen=True)
+class DeckMotion:
+    """Playhead motion history for one deck, folded in tick by tick.
+
+    ``last_motion_at`` is when the position last changed and ``playing_since``
+    is when the current playing streak began; both stay None until the deck
+    shows a second, different reading.
+    """
+
+    last_motion_at: float | None
+    playing_since: float | None
+    last_position: int | None
+
+
+def _advanced_deck_motion(
+    motion: DeckMotion | None, sample: int | None, now: float
+) -> DeckMotion:
+    """Fold one stream tick into a deck's motion record.
+
+    Any position change counts as motion, so loop wraps and hot-cue jumps
+    keep a deck playing while a frozen playhead ages toward stopped. A first
+    sighting carries no motion evidence, so a freshly loaded paused deck is
+    not mistaken for a playing one; an unreadable tick leaves the record as
+    it is so one missed reading cannot erase in-progress motion.
+    """
+    if motion is None:
+        motion = DeckMotion(last_motion_at=None, playing_since=None, last_position=None)
+    if sample is None:
+        return motion
+    if motion.last_position is None or sample == motion.last_position:
+        return DeckMotion(
+            last_motion_at=motion.last_motion_at,
+            playing_since=motion.playing_since,
+            last_position=sample,
+        )
+    was_stopped = (
+        motion.last_motion_at is None or now - motion.last_motion_at >= STOPPED_AFTER_SECONDS
+    )
+    return DeckMotion(
+        last_motion_at=now,
+        playing_since=now if was_stopped else motion.playing_since,
+        last_position=sample,
+    )
+
+
+def _select_playing_deck(
+    now: float, current: int | None, motions: list[DeckMotion | None]
+) -> int | None:
+    """Sticky on-air deck choice driven by playhead motion alone.
+
+    The playing deck keeps the slot through blends; once it stops, the deck
+    that has been playing longest takes over; with nothing playing the last
+    on-air deck holds so a pause keeps its deck.
+    """
+    if current is not None:
+        motion = motions[current - 1]
+        if (
+            motion is not None
+            and motion.last_motion_at is not None
+            and now - motion.last_motion_at < STOPPED_AFTER_SECONDS
+        ):
+            return current
+    candidates = [
+        (deck, motion.playing_since)
+        for deck, motion in enumerate(motions, start=1)
+        if motion is not None
+        and motion.last_motion_at is not None
+        and now - motion.last_motion_at <= PLAYING_MOTION_SECONDS
+    ]
+    if not candidates:
+        return current
+    return min(candidates, key=lambda entry: (entry[1], entry[0]))[0]
 
 
 def _int_or_none(text: str) -> int | None:
@@ -196,6 +276,8 @@ class RekordboxMemoryStream:
         self._last_tick_at: float | None = None
         self._samples: list[RekordboxStreamDeckSample | None] = [None, None, None, None]
         self._tracks: list[RekordboxStreamTrack | None] = [None, None, None, None]
+        self._deck_motion: list[DeckMotion | None] = [None, None, None, None]
+        self._playing_deck: int | None = None
 
     def start(self) -> None:
         with self._lock:
@@ -418,9 +500,13 @@ class RekordboxMemoryStream:
                 at_monotonic=now,
                 previous_sample_position=None if previous is None else previous.sample_position,
             )
+            self._deck_motion[deck - 1] = _advanced_deck_motion(
+                self._deck_motion[deck - 1], sample, now
+            )
         self._status = (
             "exact" if any(value is not None for value in tick.samples) else "probe-failed:unreadable"
         )
+        self._playing_deck = _select_playing_deck(now, self._playing_deck, self._deck_motion)
 
     def _set_status(self, status: str) -> None:
         with self._lock:
@@ -434,6 +520,9 @@ class RekordboxMemoryStream:
             track = self._tracks[master]
             if track is not None and track.title:
                 return master + 1
+        deck = _select_playing_deck(self._clock(), self._playing_deck, self._deck_motion)
+        if deck is not None:
+            return deck
         if not observation_title:
             return None
         match = _matching_rekordbox_memory_state(
