@@ -10,6 +10,7 @@ import {
   buildFb4Dmx16Frame,
   buildFb4ZoneFrame,
   cueIndexValue,
+  cueSpeedByte16,
   fb4CueRequires39Channel,
   intensityToDimmer,
   pageIndexValue,
@@ -84,7 +85,7 @@ describe("FB4 DMX16 mapping", () => {
     expect(frame.cue).toBe(target.cue);
     expect(frame.channels[1]).toBe(pageIndexValue(frame.page));
     expect(frame.channels[2]).toBe(cueIndexValue(frame.cue));
-    expect(frame.channels[3]).toBe(122);
+    expect(frame.channels[3]).toBe(cueSpeedByte16(122));
     expect(frame.channels[4]).toBe(255);
     expect(frame.channels[6]).toBeGreaterThanOrEqual(150);
     expect(frame.channels[6]).toBeLessThanOrEqual(255);
@@ -573,6 +574,35 @@ describe("FB4 spec conformance (Pangolin wiki)", () => {
     expect(frame.channels[37]).toBe(0);
     // ch39 Strobe: 0 = disabled.
     expect(frame.channels[38]).toBe(0);
+  });
+
+  it("encodes 16-channel cue speed as the percentage band, not a BPM number", () => {
+    // Cues export at 100 BPM: 100% = 128, the band spans 25%..200%.
+    expect(cueSpeedByte16(100)).toBe(128);
+    expect(cueSpeedByte16(200)).toBe(255);
+    expect(cueSpeedByte16(25)).toBe(33);
+    expect(cueSpeedByte16(122)).toBe(156);
+    expect(cueSpeedByte16(50)).toBe(65);
+  });
+
+  it("centers 39-channel positions and zeroes the fine size bytes", () => {
+    const frame = buildFb4CueFrame(8, 122);
+
+    // ch24/25 Z Angle: 0 degrees, not the 128,128 upside-down pair.
+    expect(frame.channels[23]).toBe(0);
+    expect(frame.channels[24]).toBe(0);
+    // ch28-31 Position X/Y: centre is 32768 = bytes 128,0.
+    expect(frame.channels[27]).toBe(128);
+    expect(frame.channels[28]).toBe(0);
+    expect(frame.channels[29]).toBe(128);
+    expect(frame.channels[30]).toBe(0);
+    // ch18-23 Zoom and Size X/Y: coarse value high, fine byte 0.
+    expect(frame.channels[17]).toBe(128);
+    expect(frame.channels[18]).toBe(0);
+    expect(frame.channels[19]).toBe(160);
+    expect(frame.channels[20]).toBe(0);
+    expect(frame.channels[21]).toBe(160);
+    expect(frame.channels[22]).toBe(0);
   });
 
   it("keeps 16-channel show frames at 100% visible points, 30K scan, and loop release", () => {

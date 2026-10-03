@@ -273,8 +273,8 @@ function clampByte(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
 
+/** Writes a coarse value and a zero fine byte: the 16-bit pairs are MSB-first. */
 function writeByte16(channels: number[], startIndex: number, byteValue: number): void {
-  const coarse = clampByte(byteValue);
-  channels[startIndex] = coarse;
-  channels[startIndex + 1] = coarse;
+  channels[startIndex] = clampByte(byteValue);
+  channels[startIndex + 1] = 0;
 }

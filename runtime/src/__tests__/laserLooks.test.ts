@@ -245,9 +245,9 @@ describe("laser looks", () => {
     expect(hit.profile).toBe("pangolin-fb4-dmx39");
     expect(hit.channels[16]).toBe(255);
     expect(hit.channels[19]).toBe(255);
-    expect(hit.channels[20]).toBe(255);
+    expect(hit.channels[20]).toBe(0);
     expect(hit.channels[21]).toBe(255);
-    expect(hit.channels[22]).toBe(255);
+    expect(hit.channels[22]).toBe(0);
 
     const build = applyLaserLook(
       buildFb4Dmx16Frame({
@@ -276,7 +276,7 @@ describe("laser looks", () => {
       context({ phraseKind: "breakdown", beatsIntoPhrase: 16 })
     );
     expect(breakdown.channels[23]).toBe(64);
-    expect(breakdown.channels[24]).toBe(64);
+    expect(breakdown.channels[24]).toBe(0);
   });
 
   it("shifts beat-timed events earlier by the latency compensation", () => {

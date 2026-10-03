@@ -112,7 +112,7 @@ export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
       240,
       pageIndexValue(pageNumber),
       cueIndexValue(cueNumber),
-      clampByte(Math.round(bpm)),
+      cueSpeedByte16(bpm),
       intensityToDimmer(intensity),
       128,
       size,
@@ -219,7 +219,7 @@ export function buildFb4CueFrame(cueNumber: number, bpm = 122, pageNumber = 1): 
       zoom: 128,
       sizeX: 160,
       sizeY: 160,
-      angle: 128,
+      angle: 0,
       positionX: 128,
       positionY: 128,
       scan: 240,
@@ -275,7 +275,7 @@ export function buildFb4FadeOverlayFrame(dimmer: number, bpm = 122): Fb4Dmx16Fra
       zoom: 128,
       sizeX: 160,
       sizeY: 160,
-      angle: 128,
+      angle: 0,
       positionX: 128,
       positionY: 128,
       scan: 240,
@@ -360,12 +360,26 @@ export function selectVariedFb4Palette(input: Fb4PaletteVarietyInput): string {
   return alternatives[positiveModulo(stableHash(`${input.eventKey}|switch`), alternatives.length)] ?? input.currentPalette;
 }
 
+/**
+ * The 16-channel cue speed channel is a percentage band, not a BPM number
+ * (0-15 full speed, 17-31 pause, 33-255 = 25%..200% with 128 = 100%), and FB4
+ * cues are exported at 100 BPM, so the byte encodes bpm/100.
+ * https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx16
+ */
+export function cueSpeedByte16(bpm: number): number {
+  const ratio = Math.max(0.25, Math.min(2, bpm / 100));
+  if (ratio <= 1) {
+    return Math.round(33 + ((ratio - 0.25) / 0.75) * 95);
+  }
+  return Math.round(128 + (ratio - 1) * 127);
+}
+
 function baseCueChannels(input: { bpm: number; pageNumber: number; cueNumber: number; dimmer: number; color: number }): number[] {
   return [
     240,
     pageIndexValue(input.pageNumber),
     cueIndexValue(input.cueNumber),
-    clampByte(Math.round(input.bpm)),
+    cueSpeedByte16(input.bpm),
     clampByte(input.dimmer),
     128,
     160,
@@ -411,12 +425,15 @@ function baseCueChannels39(input: {
   channels[14] = clampByte(input.cueNumber);
   channels[15] = clampByte(Math.round(input.bpm));
   channels[16] = clampByte(input.dimmer);
-  write16Bit(channels, 17, scaleByteTo16(input.zoom));
-  write16Bit(channels, 19, scaleByteTo16(input.sizeX));
-  write16Bit(channels, 21, scaleByteTo16(input.sizeY));
+  // Sizes and positions are 16-bit MSB-first with centre 32768 (bytes 128,0),
+  // so the coarse byte rides high and the fine byte stays 0 instead of
+  // 128,128, which overshoots centre and skews sizes.
+  write16Bit(channels, 17, input.zoom << 8);
+  write16Bit(channels, 19, input.sizeX << 8);
+  write16Bit(channels, 21, input.sizeY << 8);
   write16Bit(channels, 23, scaleByteTo16(input.angle));
-  write16Bit(channels, 27, scaleByteTo16(input.positionX));
-  write16Bit(channels, 29, scaleByteTo16(input.positionY));
+  write16Bit(channels, 27, input.positionX << 8);
+  write16Bit(channels, 29, input.positionY << 8);
   channels[31] = clampByte(input.scan);
 
   if (input.color.mode === "white") {
