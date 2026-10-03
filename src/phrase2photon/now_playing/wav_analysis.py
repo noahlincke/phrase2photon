@@ -46,10 +46,16 @@ def build_wav_analysis_extraction(
     duration_seconds: float,
     tempo: float,
     sections: list[dict[str, Any]] | None = None,
+    downbeat_seconds: float = 0.0,
 ) -> LiveSetExtraction:
     section_rows = sections or analyze_audio_sections(audio_path, duration_seconds=duration_seconds, tempo=tempo)
-    if _should_subdivide_structural_map(section_rows, tempo=tempo):
-        section_rows = _subdivide_structural_sections(section_rows, duration_seconds=duration_seconds, tempo=tempo)
+    if _should_subdivide_structural_map(section_rows, tempo=tempo, downbeat_seconds=downbeat_seconds):
+        section_rows = _subdivide_structural_sections(
+            section_rows,
+            duration_seconds=duration_seconds,
+            tempo=tempo,
+            downbeat_seconds=downbeat_seconds,
+        )
     locators: list[LocatorSnapshot] = []
     phrases: list[PhraseSnapshot] = []
 
@@ -59,7 +65,7 @@ def build_wav_analysis_extraction(
         locator = LocatorSnapshot(
             locator_id=f"wav_locator_{index}",
             name=str(section["label"]).title(),
-            time=_bar_beat_for_seconds(start_seconds, tempo),
+            time=_bar_beat_for_seconds(start_seconds, tempo, downbeat_seconds),
             order_index=index,
         )
         locators.append(locator)
@@ -69,7 +75,7 @@ def build_wav_analysis_extraction(
                 phrase_id=f"wav_phrase_{index}",
                 name=str(section["label"]).title(),
                 start_bar_beat=locator.time,
-                end_bar_beat=_bar_beat_for_seconds(end_seconds, tempo),
+                end_bar_beat=_bar_beat_for_seconds(end_seconds, tempo, downbeat_seconds),
                 locator_id=locator.locator_id,
                 next_locator_id=next_locator_id,
                 active_track_ids=[],
@@ -91,6 +97,7 @@ def build_wav_analysis_extraction(
         source_name=title,
         tempo=tempo,
         time_signature="4/4",
+        first_downbeat_seconds=downbeat_seconds,
         locators=locators,
         tracks=[],
         phrases=phrases,
@@ -98,8 +105,11 @@ def build_wav_analysis_extraction(
     )
 
 
-def _bar_beat_for_seconds(seconds: float, tempo: float) -> str:
-    total_beats = seconds * tempo / 60.0
+def _bar_beat_for_seconds(seconds: float, tempo: float, downbeat_seconds: float = 0.0) -> str:
+    total_beats = (seconds - downbeat_seconds) * tempo / 60.0
+    if total_beats < 0:
+        # Material before the first downbeat belongs to the first phrase.
+        return "1|1"
     bar_number = int(total_beats // 4) + 1
     beat_number = (total_beats % 4) + 1
     return f"{bar_number}|{_format_beat_number(beat_number)}"
@@ -378,6 +388,7 @@ def _subdivide_structural_sections(
     *,
     duration_seconds: float,
     tempo: float,
+    downbeat_seconds: float = 0.0,
 ) -> list[dict[str, Any]]:
     subdivided: list[dict[str, Any]] = []
     groove_count = 0
@@ -387,8 +398,8 @@ def _subdivide_structural_sections(
     for section in section_rows:
         start_seconds = float(section["start_seconds"])
         end_seconds = float(section["end_seconds"])
-        start_bar = _bar_index_for_seconds(start_seconds, tempo)
-        end_bar = _bar_index_for_seconds(end_seconds, tempo)
+        start_bar = _bar_index_for_seconds(start_seconds, tempo, downbeat_seconds)
+        end_bar = _bar_index_for_seconds(end_seconds, tempo, downbeat_seconds)
         if not _is_structurally_subdividable(start_bar, end_bar):
             subdivided.append(section)
             continue
@@ -427,8 +438,8 @@ def _subdivide_structural_sections(
             subdivided.append(
                 {
                     "label": chunk_label,
-                    "start_seconds": _seconds_for_bar(current_bar + 1, tempo),
-                    "end_seconds": _seconds_for_bar(current_bar + chunk_bars + 1, tempo),
+                    "start_seconds": _seconds_for_bar(current_bar + 1, tempo, downbeat_seconds),
+                    "end_seconds": _seconds_for_bar(current_bar + chunk_bars + 1, tempo, downbeat_seconds),
                     "energy": section["energy"],
                 }
             )
@@ -443,6 +454,7 @@ def _should_subdivide_structural_map(
     section_rows: list[dict[str, Any]],
     *,
     tempo: float,
+    downbeat_seconds: float = 0.0,
 ) -> bool:
     if len(section_rows) < 4:
         return False
@@ -450,8 +462,8 @@ def _should_subdivide_structural_map(
     if not any(label in {"lift", "drop", "groove", "outro"} for label in labels):
         return False
     for section in section_rows:
-        start_bar = _bar_index_for_seconds(float(section["start_seconds"]), tempo)
-        end_bar = _bar_index_for_seconds(float(section["end_seconds"]), tempo)
+        start_bar = _bar_index_for_seconds(float(section["start_seconds"]), tempo, downbeat_seconds)
+        end_bar = _bar_index_for_seconds(float(section["end_seconds"]), tempo, downbeat_seconds)
         if not _is_structurally_subdividable(start_bar, end_bar):
             return False
     return True
@@ -485,12 +497,12 @@ def _close_to_integer(value: float, tolerance: float = 0.125) -> bool:
     return abs(value - round(value)) <= tolerance
 
 
-def _bar_index_for_seconds(seconds: float, tempo: float) -> float:
-    return seconds * tempo / 60.0 / 4.0
+def _bar_index_for_seconds(seconds: float, tempo: float, downbeat_seconds: float = 0.0) -> float:
+    return (seconds - downbeat_seconds) * tempo / 60.0 / 4.0
 
 
-def _seconds_for_bar(bar_number: int, tempo: float) -> float:
-    return max(bar_number - 1, 0) * 240.0 / tempo
+def _seconds_for_bar(bar_number: int, tempo: float, downbeat_seconds: float = 0.0) -> float:
+    return downbeat_seconds + max(bar_number - 1, 0) * 240.0 / tempo
 
 
 def _snap_to_phrase_start(bar_number: int) -> int:

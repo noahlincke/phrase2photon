@@ -545,9 +545,11 @@ def ensure_compiled_show(
     if analysis is not None:
         tempo = analysis.tempo
         sections = analysis.sections
+        downbeat_seconds = analysis.first_downbeat_seconds
     else:
         tempo = FALLBACK_TEMPO
         sections = analyze_audio_sections(cached_audio, duration_seconds=duration_seconds, tempo=tempo)
+        downbeat_seconds = 0.0
 
     extraction = build_wav_analysis_extraction(
         audio_path=cached_audio,
@@ -556,6 +558,7 @@ def ensure_compiled_show(
         duration_seconds=duration_seconds,
         tempo=tempo,
         sections=sections,
+        downbeat_seconds=downbeat_seconds,
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
     extraction_path = cache_dir / "wav-analysis.extraction.json"

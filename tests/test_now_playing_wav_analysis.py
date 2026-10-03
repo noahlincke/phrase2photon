@@ -111,3 +111,75 @@ def test_detect_structural_sections_from_bar_energy_marks_lift_before_drop() -> 
     assert labels == ["intro", "groove", "lift", "drop", "groove", "outro"]
     assert sections[2]["start_seconds"] == 96.0
     assert sections[3]["start_seconds"] == 128.0
+
+
+def test_bar_beat_labels_count_from_the_first_downbeat() -> None:
+    extraction = build_wav_analysis_extraction(
+        audio_path=Path("/tmp/downbeat.wav"),
+        title="Downbeat",
+        artist=None,
+        duration_seconds=30.0,
+        tempo=120.0,
+        sections=[
+            {"label": "intro", "start_seconds": 0.0, "end_seconds": 8.5, "energy": "low"},
+            {"label": "drop", "start_seconds": 8.5, "end_seconds": 16.5, "energy": "peak"},
+        ],
+        downbeat_seconds=0.5,
+    )
+
+    assert extraction.first_downbeat_seconds == 0.5
+    # 0.5 s + 4 bars at 120 bpm = 8.5 s, the fifth bar's downbeat.
+    assert [phrase.start_bar_beat for phrase in extraction.phrases] == ["1|1", "5|1"]
+    assert extraction.phrases[1].end_bar_beat == "9|1"
+
+
+def test_sections_before_the_first_downbeat_clamp_to_the_first_bar() -> None:
+    extraction = build_wav_analysis_extraction(
+        audio_path=Path("/tmp/downbeat.wav"),
+        title="Downbeat",
+        artist=None,
+        duration_seconds=30.0,
+        tempo=120.0,
+        sections=[
+            {"label": "intro", "start_seconds": 0.0, "end_seconds": 0.5, "energy": "low"},
+            {"label": "drop", "start_seconds": 0.5, "end_seconds": 8.5, "energy": "peak"},
+        ],
+        downbeat_seconds=0.5,
+    )
+
+    assert [phrase.start_bar_beat for phrase in extraction.phrases] == ["1|1", "1|1"]
+
+
+def test_subdivision_stays_bar_aligned_around_a_downbeat_offset() -> None:
+    extraction = build_wav_analysis_extraction(
+        audio_path=Path("/tmp/structural.wav"),
+        title="Structural",
+        artist=None,
+        duration_seconds=352.5,
+        tempo=120.0,
+        sections=[
+            {"label": "intro", "start_seconds": 0.5, "end_seconds": 64.5, "energy": "low"},
+            {"label": "groove", "start_seconds": 64.5, "end_seconds": 160.5, "energy": "mid"},
+            {"label": "lift", "start_seconds": 160.5, "end_seconds": 192.5, "energy": "high"},
+            {"label": "drop", "start_seconds": 192.5, "end_seconds": 256.5, "energy": "peak"},
+            {"label": "groove", "start_seconds": 256.5, "end_seconds": 320.5, "energy": "high"},
+            {"label": "outro", "start_seconds": 320.5, "end_seconds": 352.5, "energy": "low"},
+        ],
+        downbeat_seconds=0.5,
+    )
+
+    # Same bar labels as the un-offset case: the whole map shifts with the
+    # downbeat instead of landing a quarter bar early.
+    assert [phrase.start_bar_beat for phrase in extraction.phrases] == [
+        "1|1",
+        "17|1",
+        "33|1",
+        "49|1",
+        "65|1",
+        "81|1",
+        "97|1",
+        "113|1",
+        "129|1",
+        "145|1",
+        "161|1",
+    ]

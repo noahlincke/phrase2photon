@@ -114,6 +114,7 @@ class LiveSetExtraction(BaseModel):
     source_name: str
     tempo: float
     time_signature: str
+    first_downbeat_seconds: float = 0.0
     scale: str | None = None
     scale_pitches: str | None = None
     producer_pal_version: str | None = None

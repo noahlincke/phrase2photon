@@ -5,7 +5,8 @@
     "title": "Example Song",
     "artist": "Phrase2Photon",
     "tempo": 128.0,
-    "time_signature": "4/4"
+    "time_signature": "4/4",
+    "tempo_map": null
   },
   "phrases": [
     {

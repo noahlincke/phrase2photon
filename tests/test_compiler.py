@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from phrase2photon.compiler.service import Phrase2PhotonCompiler, scene_name_for_phrase
+from phrase2photon.contracts.show_package import TempoMapSegment
 from phrase2photon.extraction.models import (
     EnergySnapshot,
     LiveSetExtraction,
@@ -155,3 +156,22 @@ def test_compile_to_directory_writes_runtime_files(tmp_path: Path) -> None:
 def test_scene_name_for_phrase_is_runtime_safe() -> None:
     assert scene_name_for_phrase("phrase_intro") == "scene_intro"
     assert scene_name_for_phrase("phrase_drop-2") == "scene_drop_2"
+
+
+def test_compiled_show_carries_the_measured_downbeat() -> None:
+    compiler = Phrase2PhotonCompiler()
+    extraction = make_test_extraction().model_copy(update={"first_downbeat_seconds": 0.487})
+
+    show = compiler.compile(extraction)
+
+    assert show.song.tempo_map == [
+        TempoMapSegment(start_seconds=0.0, bpm=124.0, downbeat_seconds=0.487)
+    ]
+
+
+def test_compiled_show_omits_the_tempo_map_without_a_downbeat() -> None:
+    compiler = Phrase2PhotonCompiler()
+
+    show = compiler.compile(make_test_extraction())
+
+    assert show.song.tempo_map is None

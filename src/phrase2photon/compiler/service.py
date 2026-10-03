@@ -16,6 +16,7 @@ from phrase2photon.contracts.show_package import (
     PhraseRange,
     ShowPackage,
     SongMeta,
+    TempoMapSegment,
     TrackFeatures,
     Transition,
     VisualLook,
@@ -51,6 +52,7 @@ class Phrase2PhotonCompiler:
                 artist=None,
                 tempo=extraction.tempo,
                 time_signature=extraction.time_signature,
+                tempo_map=build_tempo_map(extraction),
             ),
             phrases=phrases,
             lighting_cues=lighting_cues,
@@ -164,6 +166,18 @@ class Phrase2PhotonCompiler:
             writer.writeheader()
             writer.writerows(rows)
         return path
+
+
+def build_tempo_map(extraction: LiveSetExtraction) -> list[TempoMapSegment] | None:
+    if extraction.first_downbeat_seconds <= 0:
+        return None
+    return [
+        TempoMapSegment(
+            start_seconds=0.0,
+            bpm=extraction.tempo,
+            downbeat_seconds=extraction.first_downbeat_seconds,
+        )
+    ]
 
 
 def build_track_features(phrase: PhraseSnapshot, track_map: dict[str, TrackSnapshot]) -> list[TrackFeatures]:
