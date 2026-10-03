@@ -28,13 +28,25 @@ interface GridSpan {
   bpm: number;
 }
 
+/** Tolerance for treating a downbeat as exactly bar-aligned despite float noise. */
+const BAR_SNAP_BEATS = 1e-6;
+
 function gridSpans(grid: BeatGrid): GridSpan[] {
   const spans: GridSpan[] = [];
   grid.segments.forEach((segment, index) => {
     const previous = spans[index - 1];
-    const startBeats = previous
-      ? previous.startBeats + (segment.start_seconds - previous.startSeconds) * (previous.bpm / 60)
-      : -segment.downbeat_seconds * (segment.bpm / 60);
+    let startBeats: number;
+    if (previous) {
+      // The incoming grid continues the count from where the previous one
+      // left off, but its own downbeat must land on a whole bar - so the
+      // count jumps forward to the next bar line, never backwards.
+      const accumulated = previous.startBeats + (segment.start_seconds - previous.startSeconds) * (previous.bpm / 60);
+      const downbeatOffset = (segment.downbeat_seconds - segment.start_seconds) * (segment.bpm / 60);
+      const bars = Math.ceil((accumulated + downbeatOffset - BAR_SNAP_BEATS) / grid.beatsPerBar);
+      startBeats = bars * grid.beatsPerBar - downbeatOffset;
+    } else {
+      startBeats = -segment.downbeat_seconds * (segment.bpm / 60);
+    }
     spans.push({ startSeconds: segment.start_seconds, startBeats, bpm: segment.bpm });
   });
   return spans;
@@ -60,16 +72,22 @@ export function secondsToBeats(grid: BeatGrid, seconds: number): number {
 export function beatsToSeconds(grid: BeatGrid, beats: number): number {
   const spans = gridSpans(grid);
   let span = spans[spans.length - 1];
+  let next: GridSpan | undefined;
   for (let index = 0; index < spans.length - 1; index += 1) {
     if (beats < spans[index + 1].startBeats) {
       span = spans[index];
+      next = spans[index + 1];
       break;
     }
   }
   if (beats < span.startBeats) {
     span = spans[0];
+    next = spans[1];
   }
-  return span.startSeconds + (beats - span.startBeats) * (60 / span.bpm);
+  const seconds = span.startSeconds + (beats - span.startBeats) * (60 / span.bpm);
+  // A forward jump at a boundary leaves a band of beats that no time maps to;
+  // they clamp to the boundary instead of spilling into the next segment.
+  return next ? Math.min(seconds, next.startSeconds) : seconds;
 }
 
 /** The tempo governing a moment of the show. */
