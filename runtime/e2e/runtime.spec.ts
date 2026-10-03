@@ -120,6 +120,7 @@ test("keeps the output console collapsed to a handful of live controls", async (
     const all = [...root.querySelectorAll("button,input,select,a")];
     return {
       total: all.length,
+      cueRows: root.querySelectorAll(".cue-catalog-row").length,
       visible: all.filter((element) =>
         (element as HTMLElement).checkVisibility({ checkVisibilityCSS: true })
       ).length,
@@ -129,9 +130,24 @@ test("keeps the output console collapsed to a handful of live controls", async (
 
   // Everything remains reachable, but an operator sees only what they would
   // touch mid-set: enable, blackout, hold, brightness and the colour swatches.
-  expect(counts.total).toBeGreaterThan(100);
+  // With "Only reachable" on, the page-1 grid shows just the 48 cues that have
+  // a 16-channel address. 96 total = 34 console controls + 10 page chips +
+  // 4 colour swatches + 48 reachable cue rows.
+  expect(counts.cueRows).toBe(48);
+  expect(counts.total).toBeGreaterThanOrEqual(96);
   expect(counts.visible).toBeLessThanOrEqual(12);
   expect(counts.openDetails).toBe(0);
+
+  // Unchecking "Only reachable" reveals the whole generated page-1 grid.
+  const catalogue = page
+    .locator("#laserRoot details")
+    .filter({ has: page.locator('[data-laser="hideUnreachable"]') });
+  await catalogue.locator("summary").click();
+  const hideUnreachable = page.locator('[data-laser="hideUnreachable"]');
+  await hideUnreachable.uncheck();
+  await expect(page.locator("#laserRoot .cue-catalog-row")).toHaveCount(240);
+  await hideUnreachable.check();
+  await expect(page.locator("#laserRoot .cue-catalog-row")).toHaveCount(48);
 
   await expect(page.getByRole("button", { name: "Blackout" })).toBeVisible();
 });
