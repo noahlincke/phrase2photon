@@ -31,6 +31,11 @@ from phrase2photon.now_playing.providers import (
     scdl_candidates,
     spotdl_candidates,
 )
+from phrase2photon.now_playing.rekordbox_analysis import (
+    RekordboxAnalysis,
+    load_rekordbox_analysis,
+    snap_sections_to_bar_grid,
+)
 from phrase2photon.now_playing.rekordbox_stream import RekordboxMemoryStream
 from phrase2photon.now_playing.source_polling import (
     last_rekordbox_diagnostics,
@@ -536,6 +541,10 @@ FALLBACK_TEMPO = 124.0
 # Written next to the compiled show when the fallback above produced it, so
 # ahead-of-time preparation can tell a measured show from a guessed one.
 FALLBACK_ANALYSIS_MARKER = "fallback-analysis"
+# Records which analysis produced a show and, for rekordbox-backed shows, the
+# mtimes of the ANLZ files it came from: Noah re-grids a track by hand and the
+# cached show must follow.
+ANALYSIS_SOURCE_SIDECAR = "analysis-source.json"
 
 
 def show_dir_for_identity(audio_identity: str, *, cache_root: Path | None = None) -> Path:
@@ -555,23 +564,35 @@ def ensure_compiled_show(
         shutil.rmtree(cache_dir, ignore_errors=True)
     cached_audio = _ensure_cached_audio(resolved, cache_root=cache_root)
     show_json = show_dir / "show.json"
-    if show_json.exists():
+    if show_json.exists() and _cached_analysis_current(show_dir):
         resolved.show_dir = show_dir
         return show_dir
 
     duration_seconds = resolved.asset.measured_duration_seconds
-    # Prefer the runtime's analyser: it is the same code the live and library
-    # paths use, and it is validated against Mixed In Key. The heuristic below
-    # is only a fallback for when the analyser bundle has not been built.
-    analysis = analyze_track(cached_audio)
-    if analysis is not None:
-        tempo = analysis.tempo
-        sections = analysis.sections
-        downbeat_seconds = analysis.first_downbeat_seconds
+    # Rekordbox's own grid wins when the file is in the collection: Noah fixes
+    # those beat grids by hand, so the downbeat is exact. Everything below is
+    # the analyser path the service used before this existed.
+    rekordbox = load_rekordbox_analysis(resolved.asset.local_path)
+    tempo_map = rekordbox.tempo_map if rekordbox else None
+    used_fallback = False
+    if rekordbox is not None:
+        tempo = rekordbox.tempo_map[0].bpm
+        downbeat_seconds = rekordbox.tempo_map[0].downbeat_seconds
+        sections = _rekordbox_sections(rekordbox, cached_audio, duration_seconds=duration_seconds, tempo=tempo)
     else:
-        tempo = FALLBACK_TEMPO
-        sections = analyze_audio_sections(cached_audio, duration_seconds=duration_seconds, tempo=tempo)
-        downbeat_seconds = 0.0
+        # Prefer the runtime's analyser: it is the same code the live and library
+        # paths use, and it is validated against Mixed In Key. The heuristic below
+        # is only a fallback for when the analyser bundle has not been built.
+        analysis = analyze_track(cached_audio)
+        if analysis is not None:
+            tempo = analysis.tempo
+            sections = analysis.sections
+            downbeat_seconds = analysis.first_downbeat_seconds
+        else:
+            used_fallback = True
+            tempo = FALLBACK_TEMPO
+            sections = analyze_audio_sections(cached_audio, duration_seconds=duration_seconds, tempo=tempo)
+            downbeat_seconds = 0.0
 
     extraction = build_wav_analysis_extraction(
         audio_path=cached_audio,
@@ -581,9 +602,11 @@ def ensure_compiled_show(
         tempo=tempo,
         sections=sections,
         downbeat_seconds=downbeat_seconds,
+        tempo_map=tempo_map,
+        subdivide=rekordbox is None,
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
-    if analysis is None:
+    if used_fallback:
         (cache_dir / FALLBACK_ANALYSIS_MARKER).write_text(f"tempo={FALLBACK_TEMPO}\n", encoding="utf-8")
     extraction_path = cache_dir / "wav-analysis.extraction.json"
     extraction_path.write_text(extraction.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -600,8 +623,69 @@ def ensure_compiled_show(
         ],
         check=True,
     )
+    _write_analysis_source_sidecar(show_dir, rekordbox)
     resolved.show_dir = show_dir
     return show_dir
+
+
+def _rekordbox_sections(
+    rekordbox: RekordboxAnalysis,
+    cached_audio: Path,
+    *,
+    duration_seconds: float,
+    tempo: float,
+) -> list[dict[str, Any]]:
+    if rekordbox.phrases:
+        return [
+            {
+                "label": phrase.label,
+                "energy": phrase.energy,
+                "start_seconds": phrase.start_seconds,
+                "end_seconds": phrase.end_seconds,
+            }
+            for phrase in rekordbox.phrases
+        ]
+    # No phrase analysis in rekordbox: keep the analyser's structure but put
+    # every interior boundary on a bar of rekordbox's hand-fixed grid.
+    analysis = analyze_track(cached_audio)
+    if analysis is not None:
+        sections = analysis.sections
+    else:
+        sections = analyze_audio_sections(cached_audio, duration_seconds=duration_seconds, tempo=tempo)
+    return snap_sections_to_bar_grid(sections, rekordbox)
+
+
+def _cached_analysis_current(show_dir: Path) -> bool:
+    """True when the cached show's analysis is still the one we would build.
+
+    Rekordbox-backed shows record their ANLZ mtimes next to show.json, so a
+    re-gridded track rebuilds on the next preparation. Shows compiled from the
+    analyser, or before the sidecar existed, never invalidate here.
+    """
+    sidecar = show_dir / ANALYSIS_SOURCE_SIDECAR
+    if not sidecar.is_file():
+        return True
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    for path_text, mtime in (payload.get("anlz_mtimes") or {}).items():
+        try:
+            if Path(path_text).stat().st_mtime != mtime:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _write_analysis_source_sidecar(show_dir: Path, rekordbox: RekordboxAnalysis | None) -> None:
+    mtimes: dict[str, float] = {}
+    if rekordbox is not None:
+        mtimes = {str(path): path.stat().st_mtime for path in rekordbox.anlz_files}
+    (show_dir / ANALYSIS_SOURCE_SIDECAR).write_text(
+        json.dumps({"analysis_source": "rekordbox-anlz" if rekordbox else "analyser", "anlz_mtimes": mtimes}, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def build_status_payload(

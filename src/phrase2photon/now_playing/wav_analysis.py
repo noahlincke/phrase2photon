@@ -6,6 +6,8 @@ import statistics
 import subprocess
 from typing import Any
 
+from phrase2photon.contracts.beat_grid import BeatGrid, bar_beat_for_seconds
+from phrase2photon.contracts.show_package import TempoMapSegment
 from phrase2photon.extraction.models import (
     EnergySnapshot,
     LiveSetExtraction,
@@ -47,9 +49,15 @@ def build_wav_analysis_extraction(
     tempo: float,
     sections: list[dict[str, Any]] | None = None,
     downbeat_seconds: float = 0.0,
+    tempo_map: list[TempoMapSegment] | None = None,
+    subdivide: bool = True,
 ) -> LiveSetExtraction:
     section_rows = sections or analyze_audio_sections(audio_path, duration_seconds=duration_seconds, tempo=tempo)
-    if _should_subdivide_structural_map(section_rows, tempo=tempo, downbeat_seconds=downbeat_seconds):
+    # Rekordbox-backed shows carry their own tempo map and bar-accurate
+    # boundaries, so their phrase map is used as-is instead of re-chunked.
+    if subdivide and tempo_map is None and _should_subdivide_structural_map(
+        section_rows, tempo=tempo, downbeat_seconds=downbeat_seconds
+    ):
         section_rows = _subdivide_structural_sections(
             section_rows,
             duration_seconds=duration_seconds,
@@ -58,6 +66,11 @@ def build_wav_analysis_extraction(
         )
     locators: list[LocatorSnapshot] = []
     phrases: list[PhraseSnapshot] = []
+    grid = (
+        BeatGrid(segments=list(tempo_map), beats_per_bar=4)
+        if tempo_map
+        else None
+    )
 
     for index, section in enumerate(section_rows):
         start_seconds = float(section["start_seconds"])
@@ -65,7 +78,7 @@ def build_wav_analysis_extraction(
         locator = LocatorSnapshot(
             locator_id=f"wav_locator_{index}",
             name=str(section["label"]).title(),
-            time=_bar_beat_for_seconds(start_seconds, tempo, downbeat_seconds),
+            time=_bar_beat(start_seconds, tempo, downbeat_seconds, grid),
             order_index=index,
         )
         locators.append(locator)
@@ -75,7 +88,7 @@ def build_wav_analysis_extraction(
                 phrase_id=f"wav_phrase_{index}",
                 name=str(section["label"]).title(),
                 start_bar_beat=locator.time,
-                end_bar_beat=_bar_beat_for_seconds(end_seconds, tempo, downbeat_seconds),
+                end_bar_beat=_bar_beat(end_seconds, tempo, downbeat_seconds, grid),
                 locator_id=locator.locator_id,
                 next_locator_id=next_locator_id,
                 active_track_ids=[],
@@ -98,11 +111,18 @@ def build_wav_analysis_extraction(
         tempo=tempo,
         time_signature="4/4",
         first_downbeat_seconds=downbeat_seconds,
+        tempo_map=tempo_map,
         locators=locators,
         tracks=[],
         phrases=phrases,
         warnings=[],
     )
+
+
+def _bar_beat(seconds: float, tempo: float, downbeat_seconds: float, grid: BeatGrid | None) -> str:
+    if grid is not None:
+        return bar_beat_for_seconds(grid, seconds)
+    return _bar_beat_for_seconds(seconds, tempo, downbeat_seconds)
 
 
 def _bar_beat_for_seconds(seconds: float, tempo: float, downbeat_seconds: float = 0.0) -> str:

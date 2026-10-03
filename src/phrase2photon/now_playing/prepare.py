@@ -331,6 +331,7 @@ def prepare_show_entry(
         "show_dir": None,
         "status": "failed",
         "tempo": None,
+        "analysis_source": None,
         "phrase_count": None,
         "duration": None,
         "problems": [],
@@ -380,6 +381,7 @@ def prepare_show_entry(
         row["problems"] = [f"show.json failed validation: {error}"]
         return row
 
+    row["analysis_source"] = _analysis_source(show_json)
     row["tempo"] = package.song.tempo
     row["phrase_count"] = len(package.phrases)
     row["track_count"] = len(entry.get("segments") or []) or None
@@ -396,6 +398,17 @@ def prepare_show_entry(
     row["problems"] = problems
     row["status"] = "ok" if not problems else "failed"
     return row
+
+
+def _analysis_source(show_json: Path) -> str | None:
+    """Which analysis produced this show, from the sidecar ensure_compiled_show
+    writes; None for shows compiled before that sidecar existed."""
+    try:
+        payload = json.loads((show_json.parent / "analysis-source.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    source = payload.get("analysis_source")
+    return str(source) if source else None
 
 
 def _recording_problems(

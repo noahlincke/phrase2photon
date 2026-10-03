@@ -4,6 +4,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from phrase2photon.cli import _load_extraction
 from phrase2photon.now_playing.models import PreparedAudioAsset, ProviderCandidate, ResolvedNowPlayingTrack, TrackObservation
 from phrase2photon.now_playing.source_polling import poll_osascript_app
@@ -16,6 +18,15 @@ from phrase2photon.now_playing.server import (
     poll_now_playing_source,
     route_request,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_rekordbox(monkeypatch) -> None:
+    # Test files are not in the Rekordbox collection; keep show preparation from
+    # opening the real database while it proves that.
+    monkeypatch.setattr(
+        "phrase2photon.now_playing.server.load_rekordbox_analysis", lambda _path: None
+    )
 
 
 def _observation(*, observed_at: datetime | None = None) -> TrackObservation:

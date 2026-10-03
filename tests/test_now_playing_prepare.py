@@ -3,6 +3,8 @@ import wave
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from phrase2photon.contracts.show_package import ShowPackage
 from phrase2photon.now_playing.identity import audio_identity_slug
 from phrase2photon.now_playing.models import PreparedAudioAsset, ResolvedNowPlayingTrack, TrackObservation
@@ -10,6 +12,15 @@ from phrase2photon.now_playing.prepare import ensure_show_for_audio_file, prepar
 from phrase2photon.now_playing.providers import measured_duration_seconds
 from phrase2photon.now_playing.server import audio_sha256_file, ensure_compiled_show
 from phrase2photon.now_playing.track_analysis import TrackAnalysis
+
+
+@pytest.fixture(autouse=True)
+def _no_rekordbox(monkeypatch) -> None:
+    # Test files are not in the Rekordbox collection; keep show preparation from
+    # opening the real database while it proves that.
+    monkeypatch.setattr(
+        "phrase2photon.now_playing.server.load_rekordbox_analysis", lambda _path: None
+    )
 
 
 def _write_wav(path: Path, *, seconds: float, sample_rate: int = 8000) -> None:
