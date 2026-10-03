@@ -69,4 +69,20 @@ describe("phrase schedule", () => {
     expect(playback.active.phrase.phrase_id).toBe("phrase_b");
     expect(playback.bar).toBe(5);
   });
+
+  it("clamps the lead-in before the first downbeat to bar 1 beat 1", () => {
+    // Shows compiled from a measured first downbeat play through the lead-in
+    // before it; the grid counts beats from that downbeat, so raw beats go
+    // negative there and would hand the HUD a bar 0.
+    const leadIn: ShowPackage = {
+      ...show,
+      song: { ...show.song, tempo_map: [{ start_seconds: 0, bpm: 120, downbeat_seconds: 1.4 }] }
+    };
+    const schedule = buildPhraseSchedule(leadIn);
+
+    const playback = playbackStateAt(schedule, 0.0, gridFor(leadIn));
+    expect(playback.beat).toBe(1);
+    expect(playback.bar).toBe(1);
+    expect(playback.active.phrase.phrase_id).toBe("phrase_a");
+  });
 });

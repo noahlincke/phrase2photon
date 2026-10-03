@@ -795,7 +795,9 @@ function showMusicalFrame(): MusicalContext | null {
   const playback = playbackStateAt(schedule, seconds, grid);
   const phrase = playback.active.phrase;
   const bands = fileAnalyser.snapshot();
-  const beat = secondsToBeats(grid, seconds);
+  // Lead-in before the first downbeat clamps to beat 0, mirroring the Python
+  // beat-grid twin; a negative beat hands the visuals a barInPhrase of -1.
+  const beat = Math.max(0, secondsToBeats(grid, seconds));
 
   if (phrase.phrase_id !== lastPhraseId) {
     notePhraseChange(phrase.phrase_id, performance.now());
@@ -1026,7 +1028,7 @@ function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
   const grid = gridFor(loaded.show);
   const secondsEff = seconds + laser.latencyCompensationMs / 1000;
   const playback = playbackStateAt(schedule, secondsEff, grid);
-  const beatFloat = secondsToBeats(grid, secondsEff);
+  const beatFloat = Math.max(0, secondsToBeats(grid, secondsEff));
   const next = schedule[schedule.indexOf(playback.active) + 1];
   const frame = withLaserLook(
     buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress, tempoAt(grid, secondsEff)),

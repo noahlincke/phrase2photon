@@ -57,7 +57,9 @@ export function playbackStateAt(schedule: ScheduledPhrase[], seconds: number, gr
     (seconds < schedule[0].startSeconds ? schedule[0] : schedule[schedule.length - 1]);
   const duration = Math.max(active.endSeconds - active.startSeconds, 0.001);
   const phraseProgress = clamp01((seconds - active.startSeconds) / duration);
-  const beatFloat = secondsToBeats(grid, seconds);
+  // Beats before the first downbeat are the lead-in, not negative music: the
+  // Python beat-grid twin clamps them to "1|1" there, so the HUD must too.
+  const beatFloat = Math.max(0, secondsToBeats(grid, seconds));
   const beat = Math.floor(beatFloat) + 1;
   const bar = Math.floor(beatFloat / grid.beatsPerBar) + 1;
   const phase = beatFloat - Math.floor(beatFloat);
