@@ -10,6 +10,8 @@ export interface Fb4Dmx16Input {
   phraseProgress: number;
   cueSelection?: Fb4CueSelection;
   paletteOverride?: string;
+  /** Current tempo on the show's grid; defaults to the show's headline tempo. */
+  bpm?: number;
 }
 
 export interface Fb4Dmx16Frame {
@@ -48,6 +50,7 @@ export interface Fb4PaletteVarietyInput {
 }
 
 export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
+  const bpm = input.bpm ?? input.show.song.tempo;
   const palette = input.paletteOverride ?? input.phrase.visual_look.palette;
   const laserCue = input.laserCue ?? findPhraseLaserCue(input.show, input.phrase.phrase_id);
   const explicitTarget = input.allowExperimental39Channel === false ? null : resolveFb4LaserCueTarget(laserCue);
@@ -68,7 +71,7 @@ export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
       colorMode: color.mode,
       label: cueDescription ? `${input.phrase.name} / ${cueDescription.name}` : input.phrase.name,
       channels: baseCueChannels39({
-        bpm: input.show.song.tempo,
+        bpm,
         pageNumber,
         cueNumber,
         dimmer: intensityToDimmer(intensity),
@@ -99,7 +102,7 @@ export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
       240,
       pageIndexValue(pageNumber),
       cueIndexValue(cueNumber),
-      clampByte(Math.round(input.show.song.tempo)),
+      clampByte(Math.round(bpm)),
       intensityToDimmer(intensity),
       128,
       size,

@@ -1,4 +1,5 @@
 import { playbackStateAt, type PhrasePlaybackState, type ScheduledPhrase } from "../runtime/schedule.js";
+import { tempoAt, type BeatGrid } from "../show/beatGrid.js";
 
 /** Band levels for reactive visuals, each 0-1. */
 export interface AudioBands {
@@ -9,7 +10,7 @@ export interface AudioBands {
 
 export interface FallbackPreviewStateInput {
   schedule: ScheduledPhrase[];
-  bpm: number;
+  grid: BeatGrid;
   anchorPhraseId: string | null;
   startedAtMs: number;
   nowMs: number;
@@ -29,12 +30,12 @@ export function buildFallbackPreviewState(input: FallbackPreviewStateInput): Fal
   const anchor =
     input.schedule.find((entry) => entry.phrase.phrase_id === input.anchorPhraseId) ??
     input.schedule[0];
-  const secondsPerBeat = 60 / Math.max(input.bpm, 1);
+  const secondsPerBeat = 60 / tempoAt(input.grid, anchor.startSeconds);
   const phraseDuration = Math.max(anchor.endSeconds - anchor.startSeconds, secondsPerBeat * 4);
   const elapsedSeconds = Math.max(0, (input.nowMs - input.startedAtMs) / 1000);
   const seconds = anchor.startSeconds + (elapsedSeconds % phraseDuration);
   const playbackSeconds = Math.min(seconds, Math.max(anchor.startSeconds, anchor.endSeconds - 0.001));
-  const playback = playbackStateAt(input.schedule, playbackSeconds, input.bpm);
+  const playback = playbackStateAt(input.schedule, playbackSeconds, input.grid);
   const bands = syntheticPreviewBands(playback.phase, elapsedSeconds);
 
   return {

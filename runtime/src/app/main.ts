@@ -49,6 +49,8 @@ import {
 import type { NowPlayingStatus } from "../nowPlaying/types.js";
 import { buildPhraseSchedule, playbackStateAt, type ScheduledPhrase } from "../runtime/schedule.js";
 import { coerceShowPackage } from "../show/hydrate.js";
+import { gridFor, secondsToBeats, tempoAt } from "../show/beatGrid.js";
+import type { BeatGrid } from "../show/beatGrid.js";
 import type { DmxLaserCue, Phrase, ShowPackage } from "../show/types.js";
 
 /**
@@ -673,11 +675,11 @@ function showMusicalFrame(): MusicalContext | null {
   if (seconds === null) {
     return idleFrame("Waiting for playback.");
   }
-  const bpm = loaded.show.song.tempo;
-  const playback = playbackStateAt(schedule, seconds, bpm);
+  const grid = gridFor(loaded.show);
+  const playback = playbackStateAt(schedule, seconds, grid);
   const phrase = playback.active.phrase;
   const bands = fileAnalyser.snapshot();
-  const beat = seconds / (60 / Math.max(bpm, 1));
+  const beat = secondsToBeats(grid, seconds);
 
   if (phrase.phrase_id !== lastPhraseId) {
     notePhraseChange(phrase.phrase_id, performance.now());
@@ -687,18 +689,18 @@ function showMusicalFrame(): MusicalContext | null {
     musical: {
       beat,
       beatPhase: beat - Math.floor(beat),
-      barPhase: ((beat % 4) + 4) % 4 / 4,
+      barPhase: ((beat % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar / grid.beatsPerBar,
       phrasePhase: playback.phraseProgress,
-      barInPhrase: Math.floor(beat / 4) % 8,
+      barInPhrase: Math.floor(beat / grid.beatsPerBar) % 8,
       energy: energyValueForPhrase(phrase),
       bands,
       paletteId: paletteOverrideId ?? phrase.visual_look.palette
     },
-    bpm,
+    bpm: tempoAt(grid, seconds),
     bar: playback.bar,
     // `playback.beat` counts beats from the start of the track; the HUD wants
     // the position inside the bar.
-    beatInBar: (((playback.beat - 1) % 4) + 4) % 4 + 1,
+    beatInBar: (((playback.beat - 1) % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar + 1,
     phraseLabel: phrase.name,
     phraseId: phrase.phrase_id,
     energy: energyValueForPhrase(phrase),
@@ -711,9 +713,10 @@ function fallbackMusicalFrame(nowMs: number): MusicalContext | null {
   if (!loaded || !schedule.length) {
     return idleFrame("Now Playing is running a reactive preview.");
   }
+  const grid = gridFor(loaded.show);
   const preview = buildFallbackPreviewState({
     schedule,
-    bpm: loaded.show.song.tempo,
+    grid,
     anchorPhraseId: nowPlayingFallbackPhraseId ?? schedule[0]?.phrase.phrase_id ?? null,
     startedAtMs: nowPlayingFallbackStartedAtMs,
     nowMs
@@ -723,21 +726,21 @@ function fallbackMusicalFrame(nowMs: number): MusicalContext | null {
   if (phrase.phrase_id !== lastPhraseId) {
     notePhraseChange(phrase.phrase_id, nowMs);
   }
-  const beat = preview.seconds / (60 / Math.max(loaded.show.song.tempo, 1));
+  const beat = secondsToBeats(grid, preview.seconds);
   return {
     musical: {
       beat,
       beatPhase: beat - Math.floor(beat),
-      barPhase: ((beat % 4) + 4) % 4 / 4,
+      barPhase: ((beat % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar / grid.beatsPerBar,
       phrasePhase: preview.playback.phraseProgress,
-      barInPhrase: Math.floor(beat / 4) % 8,
+      barInPhrase: Math.floor(beat / grid.beatsPerBar) % 8,
       energy: energyValueForPhrase(phrase),
       bands: preview.bands,
       paletteId: paletteOverrideId ?? phrase.visual_look.palette
     },
-    bpm: loaded.show.song.tempo,
+    bpm: tempoAt(grid, preview.seconds),
     bar: preview.playback.bar,
-    beatInBar: (((preview.playback.beat - 1) % 4) + 4) % 4 + 1,
+    beatInBar: (((preview.playback.beat - 1) % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar + 1,
     phraseLabel: `${phrase.name} · preview`,
     phraseId: phrase.phrase_id,
     energy: energyValueForPhrase(phrase),
@@ -826,7 +829,7 @@ function updateHud(context: MusicalContext): void {
     if (phrase) {
       laser.publishShowFrame(
         context.phraseId,
-        buildShowLaserFrame(loaded.show, phrase, context.musical.phrasePhase),
+        buildShowLaserFrame(loaded.show, phrase, context.musical.phrasePhase, context.bpm),
         performance.now()
       );
     }
@@ -848,7 +851,7 @@ function renderTimeline(activePhraseId: string | null): void {
     peaks: libraryWaveformPeaks,
     durationSeconds: duration,
     currentSeconds: currentPlaybackSeconds() ?? 0,
-    bpm: loaded.show.song.tempo,
+    grid: gridFor(loaded.show),
     phrases: schedule.map(timelinePhrase),
     activePhraseId
   });
@@ -869,14 +872,15 @@ function laserCueForPhrase(show: ShowPackage, phraseId: string): DmxLaserCue | n
   return show.dmx_laser_cues.find((cue) => cue.phrase_id === phraseId && resolveFb4LaserCueTarget(cue)) ?? null;
 }
 
-function buildShowLaserFrame(show: ShowPackage, phrase: Phrase, phraseProgress: number): Fb4Dmx16Frame {
+function buildShowLaserFrame(show: ShowPackage, phrase: Phrase, phraseProgress: number, bpm?: number): Fb4Dmx16Frame {
   return buildFb4Dmx16Frame({
     show,
     phrase,
     lightingCue: show.lighting_cues.find((cue) => cue.phrase_id === phrase.phrase_id) ?? null,
     laserCue: laserCueForPhrase(show, phrase.phrase_id),
     allowExperimental39Channel: laser.experimental39Enabled,
-    phraseProgress
+    phraseProgress,
+    bpm
   });
 }
 
@@ -934,8 +938,9 @@ function currentShowFrame(): Fb4Dmx16Frame | null {
   if (seconds === null) {
     return null;
   }
-  const playback = playbackStateAt(schedule, seconds, loaded.show.song.tempo);
-  return buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress);
+  const grid = gridFor(loaded.show);
+  const playback = playbackStateAt(schedule, seconds, grid);
+  return buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress, tempoAt(grid, seconds));
 }
 
 function activeAdvancingPhraseId(): string | null {

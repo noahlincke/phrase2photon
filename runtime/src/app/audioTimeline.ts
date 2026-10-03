@@ -1,3 +1,5 @@
+import { beatsToSeconds, secondsToBeats, type BeatGrid } from "../show/beatGrid.js";
+
 export interface TimelinePhrase {
   phraseId: string;
   name: string;
@@ -16,7 +18,7 @@ export type AudioTimelineInput =
       peaks: number[];
       durationSeconds: number;
       currentSeconds: number;
-      bpm: number;
+      grid: BeatGrid;
       phrases: TimelinePhrase[];
       activePhraseId: string | null;
     }
@@ -72,7 +74,7 @@ export class AudioTimeline {
 
   private renderKnown(input: Extract<AudioTimelineInput, { mode: "known" }>): void {
     const duration = Math.max(0.001, input.durationSeconds);
-    this.drawBeatGrid(0, this.width, 0, duration, input.bpm);
+    this.drawBeatGrid(0, this.width, 0, duration, 0, input.grid);
     this.drawPhraseSpans(input.phrases, input.activePhraseId, 0, this.width, 0, duration);
     this.drawPeaks(input.peaks, 0, this.width, "rgba(217, 255, 0, 0.72)");
     const markerX = clamp(input.currentSeconds / duration, 0, 1) * this.width;
@@ -135,19 +137,34 @@ export class AudioTimeline {
     });
   }
 
-  private drawBeatGrid(xStart: number, xEnd: number, startSeconds: number, endSeconds: number, bpm: number): void {
-    if (!Number.isFinite(bpm) || bpm <= 0) {
+  private drawBeatGrid(
+    xStart: number,
+    xEnd: number,
+    startSeconds: number,
+    endSeconds: number,
+    bpm: number,
+    grid?: BeatGrid
+  ): void {
+    if (!grid && (!Number.isFinite(bpm) || bpm <= 0)) {
       return;
     }
     const secondsPerBeat = 60 / bpm;
+    const beatsPerBar = grid ? grid.beatsPerBar : 4;
     const duration = Math.max(0.001, endSeconds - startSeconds);
-    const firstBeat = Math.ceil(startSeconds / secondsPerBeat);
-    const lastBeat = Math.floor(endSeconds / secondsPerBeat);
+    const firstBeat = grid
+      ? Math.ceil(secondsToBeats(grid, startSeconds))
+      : Math.ceil(startSeconds / secondsPerBeat);
+    const lastBeat = grid
+      ? Math.floor(secondsToBeats(grid, endSeconds))
+      : Math.floor(endSeconds / secondsPerBeat);
     for (let beat = firstBeat; beat <= lastBeat; beat += 1) {
-      const seconds = beat * secondsPerBeat;
+      const seconds = grid ? beatsToSeconds(grid, beat) : beat * secondsPerBeat;
+      if (seconds < startSeconds) {
+        continue;
+      }
       const x = xStart + ((seconds - startSeconds) / duration) * (xEnd - xStart);
-      const isBar = beat % 4 === 0;
-      const isPhraseBeat = beat % 32 === 0;
+      const isBar = beat % beatsPerBar === 0;
+      const isPhraseBeat = beat % (beatsPerBar * 8) === 0;
       this.context.strokeStyle = isPhraseBeat
         ? "rgba(248, 250, 252, 0.34)"
         : isBar
