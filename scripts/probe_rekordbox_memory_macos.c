@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach/mach_time.h>
 #include <mach/thread_policy.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -268,9 +269,13 @@ static int run_stream(const process_ctx_t *ctx, int interval_ms) {
   // 85-125ms (a 50ms sleep wakes ~120ms late), tripling the tick period. The
   // time-constraint policy opts this thread out of coalescing so nanosleep
   // lands on its deadline; it is a per-thread hint, so it costs no CPU while
-  // sleeping.
+  // sleeping. Preemptible, so Rekordbox's own real-time audio threads always
+  // win; values are Mach absolute time, scaled from 1 ms / 5 ms.
+  mach_timebase_info_data_t timebase;
+  mach_timebase_info(&timebase);
+  uint32_t ms_abs = (uint32_t)(1000000ull * timebase.denom / timebase.numer);
   struct thread_time_constraint_policy tc = {
-      .period = 0, .computation = 5000, .constraint = 10000, .preemptible = 0};
+      .period = 0, .computation = ms_abs, .constraint = 5 * ms_abs, .preemptible = 1};
   kern_return_t tcr = thread_policy_set(mach_thread_self(),
                                         THREAD_TIME_CONSTRAINT_POLICY,
                                         (thread_policy_t)&tc,
