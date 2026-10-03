@@ -383,6 +383,7 @@ class RekordboxMemoryStream:
         *,
         observation_title: str | None = None,
         observation_artist: str | None = None,
+        show_id: str | None = None,
     ) -> dict[str, object]:
         now = self._clock()
         with self._lock:
@@ -402,6 +403,7 @@ class RekordboxMemoryStream:
                     "title": None,
                     "artist": None,
                     "ageMs": None,
+                    "showId": show_id,
                 }
             sample = self._samples[deck - 1]
             track = self._tracks[deck - 1]
@@ -419,6 +421,7 @@ class RekordboxMemoryStream:
                 "title": track.title if track is not None else None,
                 "artist": track.artist if track is not None else None,
                 "ageMs": None if sample is None else max(0.0, (now - sample.at_monotonic) * 1000.0),
+                "showId": show_id,
             }
 
     # The manager loop; also driven one step at a time by tests through _pump.

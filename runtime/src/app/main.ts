@@ -50,6 +50,7 @@ import {
 } from "../nowPlaying/handoff.js";
 import {
   heldClockStatus,
+  heldFromStatus,
   isBrowserAudioTransportSource,
   resolveNowPlayingPlaybackDurationSeconds,
   nowPlayingClockIsExact,
@@ -1271,6 +1272,9 @@ function applyPreparedTrackSource(
   schedule = buildPhraseSchedule(prepared.show);
   lastPhraseId = null;
   loadedWaveformToken = sourceKind === "now-playing" ? freshnessKey ?? prepared.track.audioUrl : prepared.track.audioUrl;
+  // The clock anchored the previous show's deck track; the new show waits for
+  // its own sample instead of inheriting that position.
+  nowPlayingClockAnchor = null;
   refreshNowPlayingDriver();
 
   if (isBrowserAudioTransportSource(sourceKind)) {
@@ -1439,9 +1443,7 @@ async function pollNowPlayingLoop(): Promise<void> {
     });
     nowPlayingCueBoundaryReached = false;
     refreshNowPlayingDriver(status);
-    if (status.observation) {
-      nowPlayingHeld = { observation: status.observation, showId: nowPlayingLoadedShowId() };
-    }
+    nowPlayingHeld = heldFromStatus(status);
     await syncNowPlayingRuntime();
   } catch (error) {
     nowPlayingFetchError = error instanceof Error ? error.message : "Now Playing status failed.";
@@ -1470,7 +1472,10 @@ async function pollNowPlayingClockLoop(): Promise<void> {
     nowPlayingClockInFlight = true;
     try {
       const sample = await fetchNowPlayingClock();
-      nowPlayingClockAnchor = clockSampleIsExact(sample)
+      // A sample the backend did not resolve to the loaded show describes
+      // another deck track; its playhead must never drive this show.
+      const ownsLoadedShow = sample.showId !== null && sample.showId === nowPlayingLoadedShowId();
+      nowPlayingClockAnchor = ownsLoadedShow && clockSampleIsExact(sample)
         ? anchorFromClockSample(sample, Date.now())
         : null;
     } catch {

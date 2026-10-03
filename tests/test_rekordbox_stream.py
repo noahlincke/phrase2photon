@@ -639,9 +639,10 @@ def test_service_clock_payload_reads_current_observation(tmp_path: Path) -> None
     captured: dict[str, object] = {}
 
     class RecordingStream:
-        def clock_payload(self, *, observation_title=None, observation_artist=None):
+        def clock_payload(self, *, observation_title=None, observation_artist=None, show_id=None):
             captured["title"] = observation_title
             captured["artist"] = observation_artist
+            captured["show_id"] = show_id
             return {"status": "exact"}
 
     observation = TrackObservation(
@@ -659,4 +660,14 @@ def test_service_clock_payload_reads_current_observation(tmp_path: Path) -> None
     service.refresh()
     payload = service.clock_payload()
     assert payload == {"status": "exact"}
-    assert captured == {"title": "Track A", "artist": "Artist A"}
+    # An unresolved observation belongs to no show, so the sample carries none.
+    assert captured == {"title": "Track A", "artist": "Artist A", "show_id": None}
+
+
+def test_stream_clock_payload_carries_show_identity() -> None:
+    stream, clock, _popen, _runner = _stream([])
+    _play_tick(stream, clock, d1="0,128.000")
+    assert stream.clock_payload(show_id="track-b")["showId"] == "track-b"
+    # Unresolved deck: the sample belongs to no show the browser may trust.
+    assert stream.clock_payload()["showId"] is None
+    assert stream.clock_payload(observation_title="Other")["showId"] is None

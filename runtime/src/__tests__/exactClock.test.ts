@@ -19,6 +19,7 @@ function sample(overrides: Partial<NowPlayingClockSample> = {}): NowPlayingClock
     title: "Track",
     artist: null,
     ageMs: 0,
+    showId: null,
     ...overrides
   };
 }

@@ -100,4 +100,9 @@ export interface NowPlayingClockSample {
   title: string | null;
   artist: string | null;
   ageMs: number | null;
+  /**
+   * The show the backend resolved the deck's track to, or null while
+   * unresolved. A sample that belongs to no show must never drive one.
+   */
+  showId: string | null;
 }

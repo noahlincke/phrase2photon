@@ -26,6 +26,19 @@ export interface NowPlayingHeldObservation {
 }
 
 /**
+ * The hold for one status, tagged with the show the backend says the
+ * observation belongs to.
+ *
+ * The status's activeShowId is the backend's resolved identity for the very
+ * observation it travels with (the resolver only reports it once the deck
+ * track matches), so it is the observation's own identity — not the loaded
+ * show's, which can already have moved on when the observation lands.
+ */
+export function heldFromStatus(status: NowPlayingStatus | null): NowPlayingHeldObservation | null {
+  return status?.observation ? { observation: status.observation, showId: status.activeShowId } : null;
+}
+
+/**
  * The status the playback clock reads, with the tracking-loss hold applied.
  *
  * While a premade show rides out the backend's tracking loss the last

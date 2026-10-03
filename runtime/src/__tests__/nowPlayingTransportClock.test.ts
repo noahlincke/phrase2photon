@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   heldClockStatus,
+  heldFromStatus,
   isBrowserAudioTransportSource,
   nowPlayingClockIsExact,
   resolveNowPlayingPlaybackSeconds,
@@ -188,5 +189,37 @@ describe("heldClockStatus", () => {
     const served = heldClockStatus(statusWithoutObservation, heldA, "show-b");
     expect(served?.observation).toBeNull();
     expect(resolveNowPlayingPlaybackSeconds(served, Date.parse("2026-05-16T21:00:00Z"))).toBeNull();
+  });
+});
+
+describe("heldFromStatus", () => {
+  it("tags the hold with the show the backend resolved the observation to", () => {
+    const status = {
+      modeState: "premade_active",
+      observation: { sourceApp: "Rekordbox", title: "Track B", artist: null },
+      activeShowId: "show-b"
+    } as unknown as NowPlayingStatus;
+    expect(heldFromStatus(status)).toEqual({
+      observation: status.observation,
+      showId: "show-b"
+    });
+  });
+
+  it("tags an unresolved observation as belonging to no show", () => {
+    const status = {
+      modeState: "reactive_fallback",
+      observation: { sourceApp: "Rekordbox", title: "Track B", artist: null },
+      activeShowId: null
+    } as unknown as NowPlayingStatus;
+    expect(heldFromStatus(status)?.showId).toBeNull();
+  });
+
+  it("holds nothing without an observation", () => {
+    const status = {
+      modeState: "premade_active",
+      observation: null,
+      activeShowId: "show-b"
+    } as unknown as NowPlayingStatus;
+    expect(heldFromStatus(status)).toBeNull();
   });
 });

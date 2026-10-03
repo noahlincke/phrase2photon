@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { fetchNowPlayingStatus } from "../nowPlaying/client.js";
+import { fetchNowPlayingClock, fetchNowPlayingStatus } from "../nowPlaying/client.js";
 
 describe("fetchNowPlayingStatus", () => {
   it("loads the same-origin status payload", async () => {
@@ -150,5 +150,29 @@ describe("fetchNowPlayingStatus", () => {
       ],
       recentEventContentIds: ["123"]
     });
+  });
+});
+
+describe("fetchNowPlayingClock", () => {
+  it("carries the show the backend resolved the deck track to", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        status: "exact",
+        deck: 1,
+        positionSeconds: 12.5,
+        playing: true,
+        bpm: 123,
+        title: "Track",
+        artist: null,
+        ageMs: 40,
+        showId: "track-b"
+      })
+    }));
+
+    const sample = await fetchNowPlayingClock(fetchImpl as unknown as typeof fetch);
+
+    expect(sample.showId).toBe("track-b");
+    expect(sample.bpm).toBe(123);
   });
 });

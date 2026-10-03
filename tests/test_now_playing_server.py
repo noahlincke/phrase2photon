@@ -851,3 +851,50 @@ def test_load_extraction_derives_legacy_phrases_when_phrase_list_is_empty(tmp_pa
     extraction = _load_extraction(str(extraction_path))
 
     assert [phrase.name for phrase in extraction.phrases] == ["Intro", "Drop"]
+
+
+def test_service_clock_payload_passes_resolved_show_identity(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class RecordingStream:
+        def clock_payload(self, *, observation_title=None, observation_artist=None, show_id=None):
+            captured["show_id"] = show_id
+            return {"status": "exact"}
+
+    audio_path = tmp_path / "example-set.wav"
+    audio_path.write_bytes(b"RIFFexample")
+    show_dir = tmp_path / "compiled-show"
+    show_dir.mkdir(parents=True, exist_ok=True)
+    (show_dir / "show.json").write_text(json.dumps({"song": {"title": "Example Set"}}), encoding="utf-8")
+    observation = _observation()
+
+    def ensure_show(resolved: ResolvedNowPlayingTrack) -> Path:
+        resolved.show_dir = show_dir
+        return show_dir
+
+    service = NowPlayingService(
+        cache_root=tmp_path,
+        min_refresh_interval_seconds=0.0,
+        poll_source=lambda: observation,
+        disk_candidates_fn=lambda _observation: [
+            ProviderCandidate(
+                provider="disk",
+                title=observation.title,
+                artist=observation.artist,
+                reported_duration_seconds=None,
+                local_path=audio_path,
+                metadata_confidence=1.0,
+            )
+        ],
+        provider_fns=[],
+        prepare_audio=lambda candidate: candidate.local_path or audio_path,
+        audio_sha256=lambda _path: "f" * 64,
+        measure_duration=lambda _path: 1200.0,
+        ensure_show=ensure_show,
+        memory_stream=RecordingStream(),
+    )
+    payload = _await_status(service, lambda item: item["modeState"] == "premade_active")
+    assert payload["modeState"] == "premade_active"
+    assert payload["activeShowId"] is not None
+    service.clock_payload()
+    assert captured["show_id"] == payload["activeShowId"]

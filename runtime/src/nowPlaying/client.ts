@@ -35,7 +35,8 @@ function validateNowPlayingClock(payload: unknown): NowPlayingClockSample {
     bpm: readNumber(payload, "bpm", "bpm"),
     title: readString(payload, "title", "title"),
     artist: readString(payload, "artist", "artist"),
-    ageMs: readNumber(payload, "ageMs", "age_ms")
+    ageMs: readNumber(payload, "ageMs", "age_ms"),
+    showId: readString(payload, "showId", "show_id")
   };
 }
 

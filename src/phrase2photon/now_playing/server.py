@@ -160,11 +160,15 @@ class NowPlayingService:
     def clock_payload(self) -> dict[str, object]:
         with self._lock:
             observation = self._status.get("observation")
+            active_show_id = self._status.get("activeShowId")
         title = observation.get("title") if isinstance(observation, dict) else None
         artist = observation.get("artist") if isinstance(observation, dict) else None
         return self.memory_stream.clock_payload(
             observation_title=title if isinstance(title, str) else None,
             observation_artist=artist if isinstance(artist, str) else None,
+            # The show the backend resolved the deck's track to; the clock sample
+            # must never drive a show it does not belong to.
+            show_id=active_show_id if isinstance(active_show_id, str) else None,
         )
 
     def refresh(self, *, force: bool = False) -> dict[str, object]:
