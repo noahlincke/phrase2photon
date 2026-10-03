@@ -386,6 +386,16 @@ function baseCueChannels39(input: {
 }): number[] {
   const channels = new Array<number>(39).fill(0);
   channels[0] = 251;
+  // Setup channels 2-13 latch only in FB4 setup mode, but 0 is not neutral on
+  // them: the spec gives max intensity range 0-100 (0 = dark) and signed size /
+  // position with 0 = the -100% extreme. Stream the uncapped full-area neutrals
+  // so a setup-mode latch can never store a collapsed or dark show.
+  // https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx39
+  channels[1] = 255;
+  write16Bit(channels, 3, 65535);
+  write16Bit(channels, 5, 65535);
+  write16Bit(channels, 7, 32768);
+  write16Bit(channels, 9, 32768);
   channels[13] = clampByte(input.pageNumber);
   channels[14] = clampByte(input.cueNumber);
   channels[15] = clampByte(Math.round(input.bpm));

@@ -452,6 +452,63 @@ describe("FB4 DMX16 mapping", () => {
   });
 });
 
+// Channel semantics pinned against Pangolin's official FB4 profiles:
+// 16-channel: https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx16
+// 39-channel: https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx39
+describe("FB4 spec conformance (Pangolin wiki)", () => {
+  it("streams uncapped full-area setup neutrals on the 39-channel profile", () => {
+    const frame = buildFb4CueFrame(8, 122);
+
+    // ch2 Max Intensity ranges 0-100: 0 caps playback to dark.
+    expect(frame.channels[1]).toBe(255);
+    // ch4-7 Setup Size X/Y range -100..100% with 0 = 32768; 65535 = full area.
+    expect(frame.channels[3]).toBe(255);
+    expect(frame.channels[4]).toBe(255);
+    expect(frame.channels[5]).toBe(255);
+    expect(frame.channels[6]).toBe(255);
+    // ch8-11 Setup Position X/Y: 32768 is center.
+    expect(frame.channels[7]).toBe(128);
+    expect(frame.channels[8]).toBe(0);
+    expect(frame.channels[9]).toBe(128);
+    expect(frame.channels[10]).toBe(0);
+    // ch12-13 Setup Rotation Z: 0 degrees.
+    expect(frame.channels[11]).toBe(0);
+    expect(frame.channels[12]).toBe(0);
+  });
+
+  it("keeps 39-channel points, rotation, alpha, and strobe at their no-op values", () => {
+    const frame = buildFb4CueFrame(8, 122);
+
+    // ch26/27 Z Rotation: 0 = original cue rotation.
+    expect(frame.channels[25]).toBe(0);
+    expect(frame.channels[26]).toBe(0);
+    // ch37/38 Points Start/End remove points; 0 = 100% visibility.
+    expect(frame.channels[36]).toBe(0);
+    expect(frame.channels[37]).toBe(0);
+    // ch39 Strobe: 0 = disabled.
+    expect(frame.channels[38]).toBe(0);
+  });
+
+  it("keeps 16-channel show frames at 100% visible points, 30K scan, and loop release", () => {
+    const frame = buildFb4Dmx16Frame({
+      show,
+      phrase: show.phrases[0],
+      lightingCue: null,
+      phraseProgress: 0,
+      paletteOverride: "white"
+    });
+
+    // ch12 Visible points: 0 = zero points, 255 = 100% visible.
+    expect(frame.channels[11]).toBe(255);
+    // ch13 Scan rate: 225-255 = 30K.
+    expect(frame.channels[12]).toBe(240);
+    // ch14 Cue release: 97-159 = loop.
+    expect(frame.channels[13]).toBe(128);
+    // ch15 Color scroll: 225-255 = white.
+    expect(frame.channels[14]).toBe(240);
+  });
+});
+
 function phraseVariant(
   slug: string,
   name: string,
