@@ -30,6 +30,7 @@ import {
   buildFb4Dmx16Frame,
   resolveFb4LaserCueTarget,
   selectVariedFb4Palette,
+  type Fb4CueFavouritePools,
   type Fb4Dmx16Frame
 } from "../dmx/fb4Dmx16.js";
 import type { PublicLibraryTrack } from "../library/types.js";
@@ -224,10 +225,21 @@ nowPlayingPreloadAudio.preload = "metadata";
  */
 const liveShow = buildLiveShow();
 
+/**
+ * Operator-curated cue pools pushed in by the laser console. The console owns
+ * the on-disk file; this copy only feeds the automatic selector.
+ */
+let laserFavourites: Fb4CueFavouritePools = {};
+
+function setLaserFavourites(favourites: Fb4CueFavouritePools): void {
+  laserFavourites = favourites;
+}
+
 const laser = new LaserConsole(ui.laserRoot, {
   currentBpm,
   currentShowFrame,
-  activeAdvancingPhraseId
+  activeAdvancingPhraseId,
+  setFavouriteCues: setLaserFavourites
 });
 
 // ---------------------------------------------------------------- dock
@@ -934,7 +946,8 @@ function buildShowLaserFrame(show: ShowPackage, phrase: Phrase, phraseProgress: 
     laserCue: laserCueForPhrase(show, phrase.phrase_id),
     allowExperimental39Channel: laser.experimental39Enabled,
     phraseProgress,
-    bpm
+    bpm,
+    favouriteCues: laserFavourites
   });
 }
 
@@ -956,7 +969,8 @@ function publishLiveLaserFrame(state: LiveMusicalState, phraseKey: string): void
     allowExperimental39Channel: laser.experimental39Enabled,
     phraseProgress: state.phrasePhase,
     paletteOverride: lastMicPaletteId ?? undefined,
-    cueSelection: { mode: "variety", rotationOrdinal: Math.max(0, state.phrase.startBar) }
+    cueSelection: { mode: "variety", rotationOrdinal: Math.max(0, state.phrase.startBar) },
+    favouriteCues: laserFavourites
   });
   laser.publishShowFrame(phraseKey, frame, performance.now());
 }
@@ -982,7 +996,8 @@ function currentShowFrame(): Fb4Dmx16Frame | null {
       lightingCue: liveShow.lighting_cues.find((cue) => cue.phrase_id === phrase.phrase_id) ?? null,
       laserCue: laserCueForPhrase(liveShow, phrase.phrase_id),
       allowExperimental39Channel: laser.experimental39Enabled,
-      phraseProgress: state.phrasePhase
+      phraseProgress: state.phrasePhase,
+      favouriteCues: laserFavourites
     });
   }
   if (!loaded || !schedule.length) {

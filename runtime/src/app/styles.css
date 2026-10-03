@@ -669,6 +669,36 @@ a {
   gap: 8px;
   padding: 6px 8px;
   text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+
+.cue-catalog-row:hover {
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.cue-catalog-row-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.favourite-chips {
+  display: flex;
+  gap: 3px;
+}
+
+.favourite-chips .chip {
+  padding: 2px 6px;
+  font-size: 10px;
 }
 
 .cue-catalog-row.disabled {

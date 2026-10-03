@@ -15,6 +15,8 @@ import {
   buildFb4LegacyCueFrame,
   buildFb4ZoneFrame,
   fb4CueRequires39Channel,
+  type Fb4CueFavouritePools,
+  type Fb4CuePoolId,
   type Fb4Dmx16Frame
 } from "../dmx/fb4Dmx16.js";
 import { applyRekordboxLineFaderMute } from "../dmx/rekordboxGate.js";
@@ -40,7 +42,16 @@ export interface LaserConsoleDeps {
   currentShowFrame(): Fb4Dmx16Frame | null;
   /** The phrase currently advancing, or null when the transport is stopped. */
   activeAdvancingPhraseId(): string | null;
+  /** Replaces the favourite pools the automatic cue selector reads. */
+  setFavouriteCues(favourites: Fb4CueFavouritePools): void;
 }
+
+const FAVOURITE_POOLS: { id: Fb4CuePoolId; label: string }[] = [
+  { id: "open", label: "O" },
+  { id: "driving", label: "D" },
+  { id: "impact", label: "I" },
+  { id: "balanced", label: "B" }
+];
 
 type LaserColorSlot = Fb4LaserColorSlot;
 type FrameSource = "show" | "overlay";
@@ -62,6 +73,7 @@ const STORAGE = {
   holdForever: "p2p.dmx.debugHoldForever",
   catalogMode: "p2p.dmx.cueCatalogMode",
   hideUnreachable: "p2p.dmx.hideUnreachableCues",
+  favouritesOnly: "p2p.dmx.favouritesOnly",
   catalogPage: "p2p.dmx.cueCatalogPage",
   catalogOverrides: "p2p.dmx.cueCatalog",
   calibration: "p2p.dmx.laserColorCalibration"
@@ -84,6 +96,7 @@ export class LaserConsole {
   private readonly deps: LaserConsoleDeps;
 
   private catalogOverrides: Record<string, Fb4CueCatalogOverride>;
+  private favourites: Fb4CueFavouritePools = {};
   private calibration: LaserColorSlot[];
   private selectedPage: number;
 
@@ -126,6 +139,7 @@ export class LaserConsole {
     this.renderCalibration();
     this.renderCatalog();
     this.startMixerPolling();
+    void this.loadFavourites();
   }
 
   private input(name: string): HTMLInputElement {
@@ -151,6 +165,7 @@ export class LaserConsole {
     this.input("holdForever").checked = localStorage.getItem(STORAGE.holdForever) === "true";
     this.input("catalogMode").checked = localStorage.getItem(STORAGE.catalogMode) === "true";
     this.input("hideUnreachable").checked = localStorage.getItem(STORAGE.hideUnreachable) !== "false";
+    this.input("favouritesOnly").checked = localStorage.getItem(STORAGE.favouritesOnly) === "true";
     for (const slider of GEOMETRY_SLIDERS) {
       const input = this.input(slider.key);
       input.value = localStorage.getItem(`p2p.dmx.${slider.key}`) || slider.fallback;
@@ -184,6 +199,10 @@ export class LaserConsole {
     });
     this.input("hideUnreachable").addEventListener("change", () => {
       localStorage.setItem(STORAGE.hideUnreachable, String(this.input("hideUnreachable").checked));
+      this.renderCatalog();
+    });
+    this.input("favouritesOnly").addEventListener("change", () => {
+      localStorage.setItem(STORAGE.favouritesOnly, String(this.input("favouritesOnly").checked));
       this.renderCatalog();
     });
     this.input("host").addEventListener("change", () => {
@@ -719,11 +738,17 @@ export class LaserConsole {
     const onPage = this.catalogEntries().filter((entry) => entry.page === this.selectedPage);
     const reachable = onPage.filter((entry) => this.unavailableReason(entry) === null);
     const hiding = this.input("hideUnreachable").checked && reachable.length < onPage.length;
-    const entries = hiding ? reachable : onPage;
+    let entries = hiding ? reachable : onPage;
+    const favouritesOnly = this.input("favouritesOnly").checked;
+    if (favouritesOnly) {
+      entries = entries.filter((entry) => this.isFavourite(entry));
+    }
 
-    this.element.catalogCount.textContent = hiding
-      ? `Showing ${reachable.length} of ${onPage.length} on this page; ${onPage.length - reachable.length} need 39-channel addressing.`
-      : `${onPage.length} cues on this page.`;
+    this.element.catalogCount.textContent = favouritesOnly
+      ? `${entries.length} favourites on this page.`
+      : hiding
+        ? `Showing ${reachable.length} of ${onPage.length} on this page; ${onPage.length - reachable.length} need 39-channel addressing.`
+        : `${onPage.length} cues on this page.`;
 
     const editing = this.input("catalogMode").checked;
     this.element.catalog.replaceChildren(
@@ -732,15 +757,19 @@ export class LaserConsole {
   }
 
   private catalogRow(entry: Fb4CueCatalogEntry): HTMLElement {
-    const row = document.createElement("button");
-    row.type = "button";
+    // A div row wrapping the audition button: the favourite chips need to be
+    // buttons too, and buttons cannot nest.
+    const row = document.createElement("div");
     row.className = "cue-catalog-row";
     const reason = this.unavailableReason(entry);
+    const audition = document.createElement("button");
+    audition.type = "button";
+    audition.className = "cue-catalog-row-main";
     if (reason) {
       row.classList.add("disabled");
-      row.disabled = true;
+      audition.disabled = true;
     } else {
-      row.addEventListener("click", () => void this.audition(entry));
+      audition.addEventListener("click", () => void this.audition(entry));
     }
     const detail = reason || entry.description || entry.notes;
     const text = document.createElement("div");
@@ -749,8 +778,9 @@ export class LaserConsole {
       `<span>P${entry.page} C${entry.cue}</span>` +
       `<strong>${escapeHtml(entry.name)}</strong>` +
       `<small>${escapeHtml(detail)}</small>`;
-    row.append(...(entry.thumbnailPath ? [thumbnail(entry)] : []), text);
-    row.title = detail || "Local catalog entry.";
+    audition.append(...(entry.thumbnailPath ? [thumbnail(entry)] : []), text);
+    audition.title = detail || "Local catalog entry.";
+    row.append(audition, this.favouriteChips(entry));
     return row;
   }
 
@@ -788,8 +818,67 @@ export class LaserConsole {
     if (reason) {
       row.classList.add("disabled");
     }
-    row.append(play, ...(entry.thumbnailPath ? [thumbnail(entry)] : []), label, note);
+    row.append(play, ...(entry.thumbnailPath ? [thumbnail(entry)] : []), label, note, this.favouriteChips(entry));
     return row;
+  }
+
+  private favouriteChips(entry: Fb4CueCatalogEntry): HTMLElement {
+    const chips = document.createElement("div");
+    chips.className = "favourite-chips";
+    const key = `${entry.page}:${entry.cue}`;
+    for (const pool of FAVOURITE_POOLS) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = this.favourites[pool.id]?.includes(key) ? "chip active" : "chip";
+      chip.textContent = pool.label;
+      chip.title = `${pool.id} favourites`;
+      chip.addEventListener("click", () => this.toggleFavourite(pool.id, key));
+      chips.append(chip);
+    }
+    return chips;
+  }
+
+  private isFavourite(entry: Fb4CueCatalogEntry): boolean {
+    const key = `${entry.page}:${entry.cue}`;
+    return FAVOURITE_POOLS.some((pool) => this.favourites[pool.id]?.includes(key));
+  }
+
+  private toggleFavourite(poolId: Fb4CuePoolId, key: string): void {
+    const keys = this.favourites[poolId] ?? [];
+    const next = keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key];
+    this.favourites = { ...this.favourites, [poolId]: next };
+    this.deps.setFavouriteCues(this.favourites);
+    this.renderCatalog();
+    void this.saveFavourites();
+  }
+
+  private async loadFavourites(): Promise<void> {
+    try {
+      const response = await fetch("/api/dmx/laser-favourites");
+      const payload = await response.json() as { pools?: Fb4CueFavouritePools };
+      this.favourites = payload.pools ?? {};
+      this.deps.setFavouriteCues(this.favourites);
+      this.renderCatalog();
+    } catch {
+      this.setStatus("Favourites unavailable.");
+    }
+  }
+
+  private async saveFavourites(): Promise<void> {
+    const body = JSON.stringify({ version: 1, pools: this.favourites });
+    try {
+      const response = await fetch("/api/dmx/laser-favourites", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body
+      });
+      const result = (await response.json()) as { ok: boolean; error?: string };
+      if (!result.ok) {
+        this.setStatus(`Favourite save failed: ${result.error ?? "unknown"}`);
+      }
+    } catch {
+      this.setStatus("Favourite save failed: output service reconnecting.");
+    }
   }
 
   private async exportCatalog(): Promise<void> {
@@ -1041,6 +1130,10 @@ const TEMPLATE = /* html */ `
       <label class="toggle-row compact">
         <input data-laser="hideUnreachable" type="checkbox" checked />
         <span>Only reachable</span>
+      </label>
+      <label class="toggle-row compact">
+        <input data-laser="favouritesOnly" type="checkbox" />
+        <span>Favourites only</span>
       </label>
       <label class="toggle-row compact">
         <input data-laser="catalogMode" type="checkbox" />

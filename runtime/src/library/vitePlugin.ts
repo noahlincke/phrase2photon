@@ -1,5 +1,5 @@
 import { createReadStream, statSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,17 @@ export function phrase2PhotonLibraryPlugin(): Plugin {
 
           if (req.method === "POST" && url.pathname === "/api/dmx/cue-catalog/export") {
             const path = await exportCueCatalog(req);
+            sendJson(res, { ok: true, path });
+            return;
+          }
+
+          if (req.method === "GET" && url.pathname === "/api/dmx/laser-favourites") {
+            sendJson(res, await readLaserFavourites());
+            return;
+          }
+
+          if (req.method === "PUT" && url.pathname === "/api/dmx/laser-favourites") {
+            const path = await writeLaserFavourites(req);
             sendJson(res, { ok: true, path });
             return;
           }
@@ -465,6 +476,30 @@ async function exportCueCatalog(req: IncomingMessage): Promise<string> {
 
 function cueCatalogExportPath(): string {
   return join(homedir(), "Phrase2PhotonShows", "exports", "fb4-cue-catalog.json");
+}
+
+const EMPTY_LASER_FAVOURITES = { version: 1, pools: {} };
+
+function laserFavouritesPath(): string {
+  return join(homedir(), "Phrase2PhotonShows", "laser-favourites.json");
+}
+
+async function readLaserFavourites(): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(laserFavouritesPath(), "utf8"));
+  } catch {
+    return EMPTY_LASER_FAVOURITES;
+  }
+}
+
+async function writeLaserFavourites(req: IncomingMessage): Promise<string> {
+  const parsed = JSON.parse(await readRequestBody(req)) as unknown;
+  const path = laserFavouritesPath();
+  await mkdir(join(homedir(), "Phrase2PhotonShows"), { recursive: true });
+  const temp = `${path}.${process.pid}.tmp`;
+  await writeFile(temp, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  await rename(temp, path);
+  return path;
 }
 
 async function probeRekordboxMixerSnapshot(): Promise<{

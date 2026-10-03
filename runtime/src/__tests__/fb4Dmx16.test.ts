@@ -191,6 +191,64 @@ describe("FB4 DMX16 mapping", () => {
     expect([1, 2, 6]).toContain(target.page);
   });
 
+  it("picks only among reachable favourites once a pool has enough of them", () => {
+    const target = resolveFb4LegacyCueTarget({
+      show,
+      phrase: show.phrases[0],
+      lightingCue: null,
+      phraseProgress: 0,
+      favouriteCues: { open: ["1:5", "1:9", "2:3", "6:12", "10:1"] }
+    });
+
+    expect([[1, 5], [1, 9], [2, 3], [6, 12]]).toContainEqual([target.page, target.cue]);
+  });
+
+  it("falls back to the default pool when a pool has fewer than four reachable favourites", () => {
+    const input = {
+      show,
+      phrase: show.phrases[0],
+      lightingCue: null,
+      phraseProgress: 0
+    };
+    const withoutFavourites = resolveFb4LegacyCueTarget(input);
+    const withTooFew = resolveFb4LegacyCueTarget({
+      ...input,
+      // "10:1" needs 39-channel addressing, so only three favourites are usable.
+      favouriteCues: { open: ["1:5", "1:9", "2:3", "10:1"] }
+    });
+
+    expect(withTooFew).toEqual(withoutFavourites);
+  });
+
+  it("ignores favourites the 16-channel fallback cannot address", () => {
+    const target = resolveFb4LegacyCueTarget({
+      show,
+      phrase: show.phrases[0],
+      lightingCue: null,
+      phraseProgress: 0,
+      // P10 and cue 49 have no 16-channel address; the remaining four still qualify.
+      favouriteCues: { open: ["10:1", "9:49", "1:5", "1:9", "2:3", "6:12"] }
+    });
+
+    expect([[1, 5], [1, 9], [2, 3], [6, 12]]).toContainEqual([target.page, target.cue]);
+  });
+
+  it("keeps variety rotation working within the favourited pool", () => {
+    const input = {
+      show,
+      phrase: show.phrases[0],
+      lightingCue: null,
+      phraseProgress: 0,
+      favouriteCues: { open: ["1:5", "1:9", "2:3", "6:12"] }
+    };
+    const first = resolveFb4LegacyCueTarget({ ...input, cueSelection: { mode: "variety", rotationOrdinal: 0 } });
+    const second = resolveFb4LegacyCueTarget({ ...input, cueSelection: { mode: "variety", rotationOrdinal: 1 } });
+
+    expect([[1, 5], [1, 9], [2, 3], [6, 12]]).toContainEqual([first.page, first.cue]);
+    expect([[1, 5], [1, 9], [2, 3], [6, 12]]).toContainEqual([second.page, second.cue]);
+    expect(second).not.toEqual(first);
+  });
+
   it("rotates live-style fallback cues across compatible full-bank targets", () => {
     const first = resolveFb4LegacyCueTarget({
       show,

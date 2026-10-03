@@ -9,6 +9,8 @@ export interface Fb4Dmx16Input {
   allowExperimental39Channel?: boolean;
   phraseProgress: number;
   cueSelection?: Fb4CueSelection;
+  /** Operator-curated pools; when a pool has enough reachable favourites the selector picks only from it. */
+  favouriteCues?: Fb4CueFavouritePools;
   paletteOverride?: string;
   /** Current tempo on the show's grid; defaults to the show's headline tempo. */
   bpm?: number;
@@ -37,6 +39,14 @@ export interface Fb4CueSelection {
   mode: Fb4CueSelectionMode;
   rotationOrdinal?: number;
 }
+
+export type Fb4CuePoolId = "open" | "balanced" | "driving" | "impact";
+
+/** Operator-favourited cue keys ("page:cue") per selection pool. */
+export type Fb4CueFavouritePools = Partial<Record<Fb4CuePoolId, string[]>>;
+
+/** A pool needs at least this many reachable favourites before it replaces the default pool. */
+export const FB4_FAVOURITE_POOL_MINIMUM = 4;
 
 export interface Fb4CueTarget {
   page: number;
@@ -292,7 +302,11 @@ export function fb4CueRequires39Channel(pageNumber: number, cueNumber: number): 
 }
 
 export function resolveFb4LegacyCueTarget(input: Fb4Dmx16Input): Fb4CueTarget {
-  const pool = legacyCuePoolForPhrase(input.phrase);
+  const poolId = legacyCueProfileForPhrase(input.phrase);
+  const favourites = favouriteCuePoolForProfile(poolId, input.favouriteCues);
+  const pool = favourites.length >= FB4_FAVOURITE_POOL_MINIMUM
+    ? favourites
+    : legacyCuePoolForProfile(poolId);
   const selection = input.cueSelection ?? { mode: "deterministic" as const };
   if (selection.mode === "variety") {
     const groups = groupLegacyCuePoolByPage(pool);
@@ -530,10 +544,8 @@ function legacyCueSelectionKey(show: ShowPackage, phrase: Phrase): string {
   ].join("|");
 }
 
-type LegacyCueProfile = "open" | "balanced" | "driving" | "impact";
-
-function legacyCuePoolForPhrase(phrase: Phrase) {
-  const allowedPages = legacyCuePagesForProfile(legacyCueProfileForPhrase(phrase));
+function legacyCuePoolForProfile(poolId: Fb4CuePoolId) {
+  const allowedPages = legacyCuePagesForProfile(poolId);
   const pool = fb4CueCatalog.filter((entry) =>
     entry.page >= 1
     && entry.page <= 9
@@ -543,6 +555,30 @@ function legacyCuePoolForPhrase(phrase: Phrase) {
   );
 
   return pool.length ? pool : fb4CueCatalog.filter((entry) => entry.page === 1 && entry.cue >= 1 && entry.cue <= 48);
+}
+
+/**
+ * Resolves the operator's favourited cues for one pool, in file order, keeping
+ * only entries the catalogue knows and the automatic selector can address.
+ * The fallback lane always emits 16-channel frames, so reachability is the
+ * 16-channel envelope regardless of the experimental 39-channel toggle.
+ */
+export function favouriteCuePoolForProfile(
+  poolId: Fb4CuePoolId,
+  favourites: Fb4CueFavouritePools | undefined
+): typeof fb4CueCatalog {
+  const entries: typeof fb4CueCatalog = [];
+  for (const key of favourites?.[poolId] ?? []) {
+    const match = /^(\d+):(\d+)$/.exec(key);
+    const page = match ? Number(match[1]) : 0;
+    const cue = match ? Number(match[2]) : 0;
+    const entry = fb4CueCatalog.find((candidate) => candidate.page === page && candidate.cue === cue);
+    if (!entry || fb4CueRequires39Channel(page, cue)) {
+      continue;
+    }
+    entries.push(entry);
+  }
+  return entries;
 }
 
 function groupLegacyCuePoolByPage(pool: typeof fb4CueCatalog): Map<number, typeof fb4CueCatalog> {
@@ -555,7 +591,7 @@ function groupLegacyCuePoolByPage(pool: typeof fb4CueCatalog): Map<number, typeo
   return grouped;
 }
 
-function legacyCueProfileForPhrase(phrase: Phrase): LegacyCueProfile {
+function legacyCueProfileForPhrase(phrase: Phrase): Fb4CuePoolId {
   const composition = phrase.visual_look.composition.toLowerCase();
   const motion = phrase.visual_look.motion_style.toLowerCase();
   const name = phrase.name.toLowerCase();
@@ -595,7 +631,7 @@ function legacyCueProfileForPhrase(phrase: Phrase): LegacyCueProfile {
   return "balanced";
 }
 
-function legacyCuePagesForProfile(profile: LegacyCueProfile): Set<number> {
+function legacyCuePagesForProfile(profile: Fb4CuePoolId): Set<number> {
   if (profile === "open") {
     return new Set([1, 2, 6]);
   }
