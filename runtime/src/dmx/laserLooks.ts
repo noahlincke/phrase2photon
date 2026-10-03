@@ -60,8 +60,9 @@ export function applyLaserLook(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4
   } else if (preDropDip(ctx)) {
     next = withDimmer(next, 0);
   } else {
-    if (ctx.phraseKind === "build") {
-      next = applyBuildRamp(next, ctx);
+    const ramp = rampWindow(ctx);
+    if (ramp) {
+      next = applyBuildRamp(next, ctx, ramp);
     }
     if (ctx.phraseKind === "groove" || ctx.phraseKind === "drop") {
       next = applyDownbeatAccent(next, ctx);
@@ -123,28 +124,55 @@ function withDimmer(frame: Fb4Dmx16Frame, dimmer: number): Fb4Dmx16Frame {
   return { ...frame, channels };
 }
 
-/** The build ramp: size grows across the phrase while the dimmer pulses faster. */
-function applyBuildRamp(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
-  const progress = clamp01(ctx.beatsIntoPhrase / Math.max(ctx.beatsInPhrase, 1));
+/** The span a build ramp measures over. */
+interface RampWindow {
+  beatsIntoRamp: number;
+  beatsInRamp: number;
+}
+
+/** Eight bars of ramp leading into a drop for phrases that are not builds. */
+const PRE_DROP_RAMP_BARS = 8;
+
+/**
+ * A build phrase ramps across its whole length; any other phrase ramps only
+ * across its final eight bars when the next phrase is a drop.
+ */
+function rampWindow(ctx: LaserLookContext): RampWindow | null {
+  if (ctx.phraseKind === "build") {
+    return { beatsIntoRamp: ctx.beatsIntoPhrase, beatsInRamp: ctx.beatsInPhrase };
+  }
+  if (ctx.nextPhraseKind === "drop") {
+    const beatsInRamp = Math.min(PRE_DROP_RAMP_BARS * ctx.beatsPerBar, ctx.beatsInPhrase);
+    const beatsIntoRamp = ctx.beatsIntoPhrase - (ctx.beatsInPhrase - beatsInRamp);
+    if (beatsIntoRamp >= 0) {
+      return { beatsIntoRamp, beatsInRamp };
+    }
+  }
+  return null;
+}
+
+/** The build ramp: size grows across the ramp window while the dimmer pulses faster. */
+function applyBuildRamp(frame: Fb4Dmx16Frame, ctx: LaserLookContext, ramp: RampWindow): Fb4Dmx16Frame {
+  const progress = clamp01(ramp.beatsIntoRamp / Math.max(ramp.beatsInRamp, 1));
   const sized = withSize(frame, Math.round(BUILD_SIZE_FLOOR + (255 - BUILD_SIZE_FLOOR) * progress));
-  const intervalBeats = buildPulseIntervalBeats(ctx);
+  const intervalBeats = buildPulseIntervalBeats(ctx, ramp);
   const peak = dimmerOf(sized);
   const base = Math.round(peak * BUILD_PULSE_FLOOR);
-  const pulsePhase = (ctx.beatsIntoPhrase % intervalBeats) / intervalBeats;
+  const pulsePhase = (ramp.beatsIntoRamp % intervalBeats) / intervalBeats;
   const pulsed = withDimmer(sized, Math.round(base + (peak - base) * (1 - pulsePhase)));
-  return finalBuildBars(ctx) ? whiteColour(pulsed) : pulsed;
+  return finalBuildBars(ctx, ramp) ? whiteColour(pulsed) : pulsed;
 }
 
 /** First half pulses on quarters, then eighths, and sixteenths for the last two bars. */
-function buildPulseIntervalBeats(ctx: LaserLookContext): number {
-  if (finalBuildBars(ctx)) {
+function buildPulseIntervalBeats(ctx: LaserLookContext, ramp: RampWindow): number {
+  if (finalBuildBars(ctx, ramp)) {
     return SIXTEENTH_BEATS;
   }
-  return ctx.beatsIntoPhrase >= ctx.beatsInPhrase / 2 ? 0.5 : 1;
+  return ramp.beatsIntoRamp >= ramp.beatsInRamp / 2 ? 0.5 : 1;
 }
 
-function finalBuildBars(ctx: LaserLookContext): boolean {
-  return ctx.beatsInPhrase - ctx.beatsIntoPhrase <= ctx.beatsPerBar * 2;
+function finalBuildBars(ctx: LaserLookContext, ramp: RampWindow): boolean {
+  return ramp.beatsInRamp - ramp.beatsIntoRamp <= ctx.beatsPerBar * 2;
 }
 
 /** Sixty percent of full size at the start of the build, full size by the drop. */

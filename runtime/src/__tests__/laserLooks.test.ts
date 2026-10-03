@@ -133,6 +133,42 @@ describe("laser looks", () => {
     expect(early.channels[14]).toBe(84);
   });
 
+  it("ramps the last eight bars of a breakdown that leads into a drop", () => {
+    // A 16-bar breakdown: the ramp covers beats 32-64 only.
+    const early = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
+    expect(early.channels[6]).toBe(198);
+    const justBefore = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 31.5, beatPhase: 0.5, beatInBar: 4 });
+    expect(justBefore.channels[6]).toBe(198);
+
+    const rampStart = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 32, beatPhase: 0, beatInBar: 1 });
+    expect(rampStart.channels[6]).toBe(153);
+    const mid = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 40, beatPhase: 0, beatInBar: 1 });
+    expect(mid.channels[6]).toBe(179);
+    const late = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56, beatPhase: 0, beatInBar: 1 });
+    expect(late.channels[6]).toBe(230);
+
+    // Last two bars of the ramp: sixteenth pulses and white.
+    const peak = intensityToDimmer(0.3);
+    const base = Math.round(peak * 0.4);
+    const sixteenth = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56.625, beatPhase: 0.625, beatInBar: 1 });
+    expect(sixteenth.channels[4]).toBe(Math.round(base + (peak - base) * 0.5));
+    const white = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 57, beatPhase: 0, beatInBar: 2 });
+    expect(white.channels[14]).toBe(240);
+    expect(white.colorLabel).toBe("White");
+    const beforeWhite = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 48, beatPhase: 0, beatInBar: 1 });
+    expect(beforeWhite.channels[14]).toBe(84);
+
+    // The last beat before the drop still goes dark.
+    const finalBeat = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 63.5, beatPhase: 0.5, beatInBar: 4 });
+    expect(finalBeat.channels[4]).toBe(0);
+  });
+
+  it("leaves a breakdown that leads into a groove un-ramped", () => {
+    const insideWindow = looked("breakdown", { nextPhraseKind: "groove", beatsInPhrase: 64, beatsIntoPhrase: 56, beatPhase: 0, beatInBar: 1 });
+    expect(insideWindow.channels[6]).toBe(198);
+    expect(insideWindow.channels[14]).toBe(84);
+  });
+
   it("accents bar downbeats in groove and every beat in drop", () => {
     const peak = intensityToDimmer(0.54);
     const base = Math.round(peak * 0.5);
