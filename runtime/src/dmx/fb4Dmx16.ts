@@ -252,7 +252,7 @@ export function buildFb4ZoneFrame(bpm = 122): Fb4Dmx16Frame {
     profile: "pangolin-fb4-dmx16",
     palette: "zone-frame",
     colorMode: "white",
-    label: "Zone frame / Square",
+    label: "Square",
     channels
   });
 }

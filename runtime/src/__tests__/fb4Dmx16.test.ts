@@ -18,6 +18,7 @@ import {
   selectVariedFb4Palette
 } from "../dmx/fb4Dmx16.js";
 import { applyCatalogOverride, describeFb4Cue, fb4CueCatalog } from "../dmx/fb4CueCatalog.js";
+import { applyLaserLook } from "../dmx/laserLooks.js";
 import type { ShowPackage } from "../show/types.js";
 
 const show: ShowPackage = {
@@ -488,7 +489,7 @@ describe("FB4 DMX16 mapping", () => {
   it("builds a full-zone square frame for projector zone tuning", () => {
     const frame = buildFb4ZoneFrame(122);
 
-    expect(frame.label).toBe("Zone frame / Square");
+    expect(frame.label).toBe("Square");
     expect(frame.cue).toBe(4);
     expect(frame.cueShape).toBe("square");
     expect(frame.channels[2]).toBe(cueIndexValue(4));
@@ -498,6 +499,31 @@ describe("FB4 DMX16 mapping", () => {
     expect(frame.channels[10]).toBe(128);
     expect(frame.channels[11]).toBe(255);
     expect(frame.channels[14]).toBe(240);
+  });
+
+  it("keeps the square test pattern at or beyond every look's geometry envelope", () => {
+    const square = buildFb4ZoneFrame(122);
+    const looked = applyLaserLook(
+      buildFb4Dmx16Frame({ show, phrase: show.phrases[1], lightingCue: null, phraseProgress: 1 }),
+      {
+        phraseKind: "drop",
+        nextPhraseKind: null,
+        beatsIntoPhrase: 0,
+        beatsInPhrase: 32,
+        beatPhase: 0,
+        beatInBar: 1,
+        beatsPerBar: 4,
+        dropHitBeats: 0
+      }
+    );
+
+    // Drop hit drives size to the look ceiling (255); the square must reach it.
+    expect(looked.channels[6]).toBe(255);
+    expect(square.channels[5]).toBeGreaterThanOrEqual(looked.channels[5]);
+    expect(square.channels[6]).toBeGreaterThanOrEqual(looked.channels[6]);
+    expect(square.channels[7]).toBeGreaterThanOrEqual(looked.channels[7]);
+    expect(square.channels[9]).toBe(looked.channels[9]);
+    expect(square.channels[10]).toBe(looked.channels[10]);
   });
 
   it("builds a valid ArtDmx packet around a 512-channel universe", () => {

@@ -1219,8 +1219,8 @@ const TEMPLATE = /* html */ `
       ).join("")}
     </div>
     <div class="button-row wrap">
-      <button data-laser="cueOne" type="button">Cue 1</button>
-      <button data-laser="zoneFrame" type="button">Zone frame</button>
+      <button data-laser="zoneFrame" type="button">Square</button>
+      <button data-laser="cueOne" type="button">Circle</button>
       <button data-laser="cueSweep" type="button">Cue sweep</button>
       <button data-laser="brightnessSweep" type="button">Brightness sweep</button>
       <button data-laser="colorOriginal" type="button">Original colour</button>
