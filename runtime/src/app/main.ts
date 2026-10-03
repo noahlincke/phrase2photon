@@ -33,6 +33,7 @@ import {
   type Fb4CueFavouritePools,
   type Fb4Dmx16Frame
 } from "../dmx/fb4Dmx16.js";
+import { applyLaserLook, latencyShiftedBeats, phraseKindFor, type LaserLookContext } from "../dmx/laserLooks.js";
 import type { PublicLibraryTrack } from "../library/types.js";
 import { fetchNowPlayingStatus } from "../nowPlaying/client.js";
 import {
@@ -864,7 +865,7 @@ function notePhraseChange(phraseId: string, nowMs: number): void {
     visuals.setScene(sceneId);
     applySceneSelection();
   }
-  publishLaserForPhrase(phrase);
+  publishLaserForPhrase();
 }
 
 function updateHud(context: MusicalContext): void {
@@ -890,14 +891,10 @@ function updateHud(context: MusicalContext): void {
   }
 
   // The laser lane runs off the same musical truth as the visuals.
-  if (loaded && context.phraseId) {
-    const phrase = loaded.show.phrases.find((entry) => entry.phrase_id === context.phraseId);
-    if (phrase) {
-      laser.publishShowFrame(
-        context.phraseId,
-        buildShowLaserFrame(loaded.show, phrase, context.musical.phrasePhase, context.bpm),
-        performance.now()
-      );
+  if (loaded && context.phraseId && !liveMicDrives()) {
+    const published = showLaserFrame();
+    if (published) {
+      laser.publishShowFrame(published.phraseId, published.frame, performance.now());
     }
   }
 }
@@ -961,29 +958,86 @@ function buildShowLaserFrame(show: ShowPackage, phrase: Phrase, phraseProgress: 
 function publishLiveLaserFrame(state: LiveMusicalState, phraseKey: string): void {
   const phrase = livePhraseFor(liveShow, state.phrase.kind);
   liveShow.song.tempo = state.bpm;
-  const frame = buildFb4Dmx16Frame({
-    show: liveShow,
-    phrase,
-    lightingCue: liveShow.lighting_cues.find((cue) => cue.phrase_id === phrase.phrase_id) ?? null,
-    laserCue: laserCueForPhrase(liveShow, phrase.phrase_id),
-    allowExperimental39Channel: laser.experimental39Enabled,
-    phraseProgress: state.phrasePhase,
-    paletteOverride: lastMicPaletteId ?? undefined,
-    cueSelection: { mode: "variety", rotationOrdinal: Math.max(0, state.phrase.startBar) },
-    favouriteCues: laserFavourites
-  });
+  // Live input has no schedule to evaluate ahead, so shift the bar-relative
+  // beat position instead: beat-timed looks fire the compensation early.
+  const relativeBeats = latencyShiftedBeats(
+    state.bar * 4 + (state.beatInBar - 1) + state.beatPhase,
+    laser.latencyCompensationMs,
+    state.bpm
+  );
+  const beatsIntoPhrase = relativeBeats - state.phrase.startBar * 4;
+  const frame = withLaserLook(
+    buildFb4Dmx16Frame({
+      show: liveShow,
+      phrase,
+      lightingCue: liveShow.lighting_cues.find((cue) => cue.phrase_id === phrase.phrase_id) ?? null,
+      laserCue: laserCueForPhrase(liveShow, phrase.phrase_id),
+      allowExperimental39Channel: laser.experimental39Enabled,
+      phraseProgress: state.phrasePhase,
+      paletteOverride: lastMicPaletteId ?? undefined,
+      cueSelection: { mode: "variety", rotationOrdinal: Math.max(0, state.phrase.startBar) },
+      favouriteCues: laserFavourites
+    }),
+    {
+      phraseKind: state.phrase.kind,
+      nextPhraseKind: null,
+      beatsIntoPhrase,
+      beatsInPhrase: 8 * 4,
+      beatPhase: relativeBeats - Math.floor(relativeBeats),
+      beatInBar: (Math.floor(relativeBeats) % 4 + 4) % 4 + 1,
+      beatsPerBar: 4,
+      dropHitBeats: state.phrase.kind === "drop" ? beatsIntoPhrase : null
+    }
+  );
   laser.publishShowFrame(phraseKey, frame, performance.now());
 }
 
-function publishLaserForPhrase(phrase: Phrase): void {
-  if (!loaded) {
-    return;
+function publishLaserForPhrase(): void {
+  const published = showLaserFrame();
+  if (published) {
+    laser.publishShowFrame(published.phraseId, published.frame, performance.now());
   }
-  laser.publishShowFrame(
-    phrase.phrase_id,
-    buildShowLaserFrame(loaded.show, phrase, 0),
-    performance.now()
+}
+
+/**
+ * The premade-show laser frame for right now, beat looks applied.
+ *
+ * The playback second is evaluated ahead by the operator's latency
+ * compensation, so phrase changes and beat-timed events leave the browser
+ * early enough to land on the downbeat after the output path's delay.
+ */
+function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
+  if (!loaded || !schedule.length) {
+    return null;
+  }
+  const seconds = currentPlaybackSeconds();
+  if (seconds === null) {
+    return null;
+  }
+  const grid = gridFor(loaded.show);
+  const secondsEff = seconds + laser.latencyCompensationMs / 1000;
+  const playback = playbackStateAt(schedule, secondsEff, grid);
+  const beatFloat = secondsToBeats(grid, secondsEff);
+  const next = schedule[schedule.indexOf(playback.active) + 1];
+  const frame = withLaserLook(
+    buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress, tempoAt(grid, secondsEff)),
+    {
+      phraseKind: phraseKindFor(playback.active.phrase),
+      nextPhraseKind: next ? phraseKindFor(next.phrase) : null,
+      beatsIntoPhrase: beatFloat - playback.active.startBeat,
+      beatsInPhrase: playback.active.endBeat - playback.active.startBeat,
+      beatPhase: beatFloat - Math.floor(beatFloat),
+      beatInBar: (Math.floor(beatFloat) % grid.beatsPerBar + grid.beatsPerBar) % grid.beatsPerBar + 1,
+      beatsPerBar: grid.beatsPerBar,
+      dropHitBeats: null
+    }
   );
+  return { phraseId: playback.active.phrase.phrase_id, frame };
+}
+
+/** Applies the beat looks unless the operator turned them off. */
+function withLaserLook(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
+  return laser.beatLooksEnabled ? applyLaserLook(frame, ctx) : frame;
 }
 
 function currentShowFrame(): Fb4Dmx16Frame | null {

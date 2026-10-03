@@ -68,6 +68,8 @@ const STORAGE = {
   universe: "p2p.dmx.universe",
   brightnessOverride: "p2p.dmx.brightnessOverride",
   brightness: "p2p.dmx.brightness",
+  beatLooks: "p2p.dmx.beatLooks",
+  latencyMs: "p2p.dmx.latencyMs",
   geometryOverride: "p2p.dmx.geometryOverride",
   rekordboxMute: "p2p.dmx.rekordboxLineFaderMute",
   holdForever: "p2p.dmx.debugHoldForever",
@@ -158,6 +160,9 @@ export class LaserConsole {
     this.input("host").value = localStorage.getItem(STORAGE.host) || "127.0.0.1";
     this.input("universe").value = localStorage.getItem(STORAGE.universe) || "0";
     this.input("brightnessOverride").checked = localStorage.getItem(STORAGE.brightnessOverride) === "true";
+    this.input("beatLooks").checked = localStorage.getItem(STORAGE.beatLooks) !== "false";
+    this.input("latencyMs").value = localStorage.getItem(STORAGE.latencyMs) || "0";
+    this.element.latencyValue.textContent = this.input("latencyMs").value;
     this.input("rekordboxMute").checked = localStorage.getItem(STORAGE.rekordboxMute) === "true";
     this.input("brightness").value = localStorage.getItem(STORAGE.brightness) || "64";
     this.element.brightnessValue.textContent = this.input("brightness").value;
@@ -214,9 +219,16 @@ export class LaserConsole {
       void this.republish();
     });
     persistToggle("brightnessOverride", STORAGE.brightnessOverride);
+    persistToggle("beatLooks", STORAGE.beatLooks);
     persistToggle("geometryOverride", STORAGE.geometryOverride);
     persistToggle("rekordboxMute", STORAGE.rekordboxMute);
     persistToggle("holdForever", STORAGE.holdForever);
+
+    this.input("latencyMs").addEventListener("change", () => {
+      localStorage.setItem(STORAGE.latencyMs, this.input("latencyMs").value);
+      this.element.latencyValue.textContent = this.input("latencyMs").value;
+      void this.republish();
+    });
 
     this.input("brightness").addEventListener("input", () => {
       this.element.brightnessValue.textContent = this.input("brightness").value;
@@ -302,6 +314,16 @@ export class LaserConsole {
     return this.input("experimental39").checked;
   }
 
+  /** Whether beat-timed looks (drop hits, build ramps, accents) run on show frames. */
+  get beatLooksEnabled(): boolean {
+    return this.input("beatLooks").checked;
+  }
+
+  /** Output latency compensation in ms; beat-timed events fire this much early. */
+  get latencyCompensationMs(): number {
+    return Number.parseInt(this.input("latencyMs").value, 10) || 0;
+  }
+
   /**
    * How much of the catalogue the current addressing mode can actually select.
    *
@@ -332,7 +354,9 @@ export class LaserConsole {
    * current phrase and any debug hold in effect.
    */
   publishShowFrame(phraseId: string, frame: Fb4Dmx16Frame, nowMs: number): void {
-    if (this.sequenceRunning || nowMs < this.overlayHoldUntil || nowMs - this.lastSentAt <= 120) {
+    // 40 fps: beat looks chop the dimmer on sixteenth notes, which at show
+    // tempos needs well under the old ~8 fps ceiling to stay on the beat.
+    if (this.sequenceRunning || nowMs < this.overlayHoldUntil || nowMs - this.lastSentAt <= 25) {
       return;
     }
     this.lastSentAt = nowMs;
@@ -1119,6 +1143,14 @@ const TEMPLATE = /* html */ `
     <label class="toggle-row">
       <input data-laser="rekordboxMute" type="checkbox" />
       <span>Mute when all Rekordbox faders are down</span>
+    </label>
+    <label class="toggle-row">
+      <input data-laser="beatLooks" type="checkbox" checked />
+      <span>Beat looks</span>
+    </label>
+    <label class="field-row">
+      <span>Output latency <strong data-laser="latencyValue">0</strong> ms</span>
+      <input data-laser="latencyMs" type="number" min="0" max="500" step="5" value="0" />
     </label>
     <div data-laser="channels" class="dmx-channels"></div>
   </details>
