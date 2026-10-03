@@ -167,3 +167,21 @@ test("switches between source modes without breaking the render loop", async ({ 
   await expect.poll(() => litPixels(page)).toBeGreaterThan(10);
   expect(errors).toEqual([]);
 });
+
+test("recover switches to Now Playing and keeps the render loop running", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  // The Recover control lives in the Now Playing panel, so enter that mode
+  // first; Recover must then hold the app there.
+  await page.locator("#nowPlayingMode").click();
+  await page.locator("#nowPlayingRecover").click();
+
+  await expect.poll(() =>
+    page.evaluate(() => window.__PHRASE2PHOTON_DEBUG__?.state().inputMode ?? null)
+  ).toBe("now-playing");
+  await expect.poll(() => litPixels(page)).toBeGreaterThan(10);
+  expect(errors).toEqual([]);
+});

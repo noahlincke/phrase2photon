@@ -2,7 +2,6 @@ import "./styles.css";
 
 import { AudioAnalyser } from "./audioAnalyser.js";
 import { AudioTimeline, loadWaveformPeaks, type TimelinePhrase } from "./audioTimeline.js";
-import { buildFallbackPreviewState } from "./fallbackPreview.js";
 import { escapeHtml, formatTime } from "./html.js";
 import { LaserConsole } from "./laserConsole.js";
 import { buildLiveShow, livePhraseFor } from "./liveShow.js";
@@ -46,6 +45,12 @@ import {
   nowPlayingClockIsExact,
   resolveNowPlayingPlaybackSeconds
 } from "../nowPlaying/transportClock.js";
+import {
+  createNowPlayingTracking,
+  resolveNowPlayingDriver,
+  type NowPlayingDriver,
+  type NowPlayingTrackingState
+} from "../nowPlaying/liveDriver.js";
 import type { NowPlayingStatus } from "../nowPlaying/types.js";
 import { buildPhraseSchedule, playbackStateAt, type ScheduledPhrase } from "../runtime/schedule.js";
 import { coerceShowPackage } from "../show/hydrate.js";
@@ -126,6 +131,7 @@ const ui = {
   nowPlayingProgress: required<HTMLDivElement>("nowPlayingProgress"),
   nowPlayingProgressFill: required<HTMLDivElement>("nowPlayingProgressFill"),
   nowPlayingMeta: required<HTMLDivElement>("nowPlayingMeta"),
+  nowPlayingRecover: required<HTMLButtonElement>("nowPlayingRecover"),
 
   sceneAuto: required<HTMLInputElement>("sceneAuto"),
   scenePicker: required<HTMLDivElement>("scenePicker"),
@@ -143,6 +149,7 @@ const micCapture = new MicCapture();
 const deckFollower = new TrackFollowerSession();
 
 const MIC_DEVICE_KEY = "p2p.mic.deviceId";
+const INPUT_MODE_KEY = "p2p.inputMode";
 const PALETTE_KEY = "p2p.look.palette";
 const SCENE_KEY = "p2p.look.scene";
 
@@ -199,8 +206,12 @@ let nowPlayingPollingStarted = false;
 let nowPlayingPrepareRequestId = 0;
 let nowPlayingLastCueStartMs: number | null = null;
 let nowPlayingCueBoundaryReached = false;
-let nowPlayingFallbackStartedAtMs = performance.now();
-let nowPlayingFallbackPhraseId: string | null = null;
+let nowPlayingDriver: NowPlayingDriver = "live-mic";
+let nowPlayingTracking = createNowPlayingTracking();
+let nowPlayingLastObservation: NowPlayingStatus["observation"] | null = null;
+let nowPlayingPollTimer: number | null = null;
+let nowPlayingPollRequested = false;
+let nowPlayingPollInFlight = false;
 let cachedTrackRefreshKey: string | null = null;
 const nowPlayingPreloadAudio = new Audio();
 nowPlayingPreloadAudio.preload = "metadata";
@@ -255,11 +266,8 @@ function setInputMode(mode: RuntimeInputMode): void {
   if (inputMode === "library" && mode !== "library") {
     captureLibraryState();
   }
-  if (mode === "now-playing") {
-    nowPlayingFallbackStartedAtMs = performance.now();
-    nowPlayingFallbackPhraseId = lastPhraseId ?? schedule[0]?.phrase.phrase_id ?? null;
-  }
   inputMode = mode;
+  localStorage.setItem(INPUT_MODE_KEY, mode);
   ui.micMode.classList.toggle("selected", mode === "mic");
   ui.libraryMode.classList.toggle("selected", mode === "library");
   ui.nowPlayingMode.classList.toggle("selected", mode === "now-playing");
@@ -274,6 +282,10 @@ function setInputMode(mode: RuntimeInputMode): void {
     nowPlayingLoadingShowId = null;
     nowPlayingLoadingFreshnessKey = null;
   } else {
+    // Now Playing shares the Mic mode's ear on the room: the deck audio the
+    // laser follows is the audio this microphone hears.
+    void ensureMicListening();
+    refreshNowPlayingDriver();
     void syncNowPlayingRuntime();
   }
   updateTransportChrome();
@@ -289,9 +301,57 @@ ui.libraryMode.addEventListener("click", () => {
 });
 ui.nowPlayingMode.addEventListener("click", () => setInputMode("now-playing"));
 
+/**
+ * One-button escape hatch for the run of show.
+ *
+ * Hands the room to the microphone immediately and re-asks the source app what
+ * is playing. If a pre-generated show is available it re-arms on the fresh
+ * poll; until then the LiveAnalyzer drives visuals and laser exactly as in Mic
+ * mode. Deliberately leaves the output lane alone - the Art-Net enable switch
+ * is the operator's, not this button's.
+ */
+async function recoverNowPlaying(): Promise<void> {
+  nowPlayingTracking = createNowPlayingTracking();
+  nowPlayingDriver = "live-mic";
+  if (micCapture.running) {
+    stopMic();
+  }
+  setInputMode("now-playing");
+  await ensureMicListening();
+  requestNowPlayingPollNow();
+}
+
+ui.nowPlayingRecover.addEventListener("click", () => void recoverNowPlaying());
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "r" && event.key !== "R") {
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) {
+    return;
+  }
+  const target = event.target;
+  if (
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" ||
+      target.isContentEditable)
+  ) {
+    return;
+  }
+  void recoverNowPlaying();
+});
+
 // ------------------------------------------------------------------- mic
 
-async function startMic(): Promise<void> {
+/**
+ * Starts the microphone and its LiveAnalyzer without touching the input mode.
+ *
+ * Both Mic mode and Now Playing mode listen through this path, so the deck
+ * audio the laser follows is captured the same way whichever panel is open.
+ */
+async function startMicListening(): Promise<boolean> {
   try {
     await micCapture.start(savedMicDeviceId);
     const analyzer = new LiveAnalyzer(micCapture.sampleRate);
@@ -308,13 +368,35 @@ async function startMic(): Promise<void> {
     liveAnalyzer = analyzer;
     void prepareDeckFollowing();
     await refreshMicDevices();
-    setInputMode("mic");
+    return true;
   } catch (error) {
     ui.micStatus.textContent = `Mic unavailable: ${
       error instanceof Error ? error.message : "permission denied"
     }`;
+    return false;
+  }
+}
+
+async function startMic(): Promise<void> {
+  if (await startMicListening()) {
+    setInputMode("mic");
   }
   updateTransportChrome();
+}
+
+let ensureMicListeningPromise: Promise<boolean> | null = null;
+
+/** Starts the mic if it is not already running; concurrent callers share one start. */
+function ensureMicListening(): Promise<boolean> {
+  if (micCapture.running) {
+    return Promise.resolve(true);
+  }
+  if (!ensureMicListeningPromise) {
+    ensureMicListeningPromise = startMicListening().finally(() => {
+      ensureMicListeningPromise = null;
+    });
+  }
+  return ensureMicListeningPromise;
 }
 
 function stopMic(): void {
@@ -322,6 +404,7 @@ function stopMic(): void {
   micCapture.stop();
   liveAnalyzer = null;
   deckFollower.stop();
+  deckFollowerTrackKey = null;
   ui.micStatus.textContent = "Mic is idle.";
   updateTransportChrome();
 }
@@ -574,7 +657,7 @@ function renderLoop(nowMs: number): void {
   const delta = Math.min(0.1, (nowMs - lastFrameMs) / 1000);
   lastFrameMs = nowMs;
 
-  const frame = currentMusicalFrame(nowMs);
+  const frame = currentMusicalFrame();
   if (frame) {
     visuals.render(frame.musical, nowMs / 1000, delta);
     updateHud(frame);
@@ -602,12 +685,23 @@ interface MusicalContext {
   lockLabel: string;
 }
 
-function currentMusicalFrame(nowMs: number): MusicalContext | null {
+/**
+ * Whether the microphone's LiveAnalyzer owns this frame.
+ *
+ * Mic mode always; Now Playing mode whenever there is no pre-generated show
+ * actively playing - including the tracking-loss handover after the grace
+ * window - so the visuals follow the room instead of a synthetic loop.
+ */
+function liveMicDrives(): boolean {
   if (isMicMode()) {
-    return micMusicalFrame();
+    return true;
   }
-  if (inputMode === "now-playing" && shouldRenderFallbackPreview()) {
-    return fallbackMusicalFrame(nowMs);
+  return inputMode === "now-playing" && nowPlayingDriver === "live-mic";
+}
+
+function currentMusicalFrame(): MusicalContext | null {
+  if (liveMicDrives()) {
+    return micMusicalFrame();
   }
   return showMusicalFrame();
 }
@@ -706,46 +800,6 @@ function showMusicalFrame(): MusicalContext | null {
     energy: energyValueForPhrase(phrase),
     status: "",
     lockLabel: "show"
-  };
-}
-
-function fallbackMusicalFrame(nowMs: number): MusicalContext | null {
-  if (!loaded || !schedule.length) {
-    return idleFrame("Now Playing is running a reactive preview.");
-  }
-  const grid = gridFor(loaded.show);
-  const preview = buildFallbackPreviewState({
-    schedule,
-    grid,
-    anchorPhraseId: nowPlayingFallbackPhraseId ?? schedule[0]?.phrase.phrase_id ?? null,
-    startedAtMs: nowPlayingFallbackStartedAtMs,
-    nowMs
-  });
-  const phrase = preview.playback.active.phrase;
-  nowPlayingFallbackPhraseId = phrase.phrase_id;
-  if (phrase.phrase_id !== lastPhraseId) {
-    notePhraseChange(phrase.phrase_id, nowMs);
-  }
-  const beat = secondsToBeats(grid, preview.seconds);
-  return {
-    musical: {
-      beat,
-      beatPhase: beat - Math.floor(beat),
-      barPhase: ((beat % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar / grid.beatsPerBar,
-      phrasePhase: preview.playback.phraseProgress,
-      barInPhrase: Math.floor(beat / grid.beatsPerBar) % 8,
-      energy: energyValueForPhrase(phrase),
-      bands: preview.bands,
-      paletteId: paletteOverrideId ?? phrase.visual_look.palette
-    },
-    bpm: tempoAt(grid, preview.seconds),
-    bar: preview.playback.bar,
-    beatInBar: (((preview.playback.beat - 1) % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar + 1,
-    phraseLabel: `${phrase.name} · preview`,
-    phraseId: phrase.phrase_id,
-    energy: energyValueForPhrase(phrase),
-    status: "Reactive preview",
-    lockLabel: "preview"
   };
 }
 
@@ -919,7 +973,7 @@ function publishLaserForPhrase(phrase: Phrase): void {
 }
 
 function currentShowFrame(): Fb4Dmx16Frame | null {
-  if (isMicMode() && liveAnalyzer) {
+  if (liveMicDrives() && liveAnalyzer) {
     const state = liveAnalyzer.snapshot(micCapture.now());
     const phrase = livePhraseFor(liveShow, state.phrase.kind);
     return buildFb4Dmx16Frame({
@@ -944,7 +998,7 @@ function currentShowFrame(): Fb4Dmx16Frame | null {
 }
 
 function activeAdvancingPhraseId(): string | null {
-  if (isMicMode()) {
+  if (liveMicDrives()) {
     return micCapture.running ? lastMicPhraseKey : null;
   }
   if (!loaded || ui.audio.paused) {
@@ -954,7 +1008,7 @@ function activeAdvancingPhraseId(): string | null {
 }
 
 function currentBpm(): number {
-  if (isMicMode() && liveAnalyzer) {
+  if (liveMicDrives() && liveAnalyzer) {
     return liveAnalyzer.currentBpm;
   }
   if (liveAnalyzer && loaded && deckFollower.snapshot.state === "following") {
@@ -981,14 +1035,14 @@ function currentPlaybackSeconds(): number | null {
   //      pile of signal processing but works for any source.
   //   3. Projecting the source app's estimate forward, which assumes the track
   //      plays start to finish and so breaks on the first loop or cue jump.
-  if (nowPlayingClockIsExact(nowPlayingStatus)) {
-    return resolveNowPlayingPlaybackSeconds(nowPlayingStatus, Date.now()) ?? 0;
+  if (nowPlayingClockIsExact(nowPlayingClockStatus())) {
+    return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now()) ?? 0;
   }
   const follow = deckFollower.snapshot.follow;
   if (deckFollower.following && follow !== null) {
     return follow.positionSeconds;
   }
-  return resolveNowPlayingPlaybackSeconds(nowPlayingStatus, Date.now()) ?? 0;
+  return resolveNowPlayingPlaybackSeconds(nowPlayingClockStatus(), Date.now()) ?? 0;
 }
 
 function currentPlaybackDuration(): number | null {
@@ -998,21 +1052,23 @@ function currentPlaybackDuration(): number | null {
   if (isBrowserAudioTransportSource(loadedSourceKind)) {
     return Number.isFinite(ui.audio.duration) ? ui.audio.duration : null;
   }
-  return resolveNowPlayingPlaybackDurationSeconds(nowPlayingStatus);
-}
-
-function shouldRenderFallbackPreview(): boolean {
-  return inputMode === "now-playing" && nowPlayingSession.outputMode === "reactive_fallback";
+  return resolveNowPlayingPlaybackDurationSeconds(nowPlayingClockStatus());
 }
 
 // ---------------------------------------------------------------- library
+
+/** Restores the input mode the control window was last left in. */
+function restoredInputMode(): RuntimeInputMode {
+  const saved = localStorage.getItem(INPUT_MODE_KEY);
+  return saved === "library" || saved === "now-playing" ? saved : "mic";
+}
 
 async function boot(): Promise<void> {
   applySceneSelection();
   visuals.setScene(activeSceneId, true);
   updateShowButton();
   updateTransportChrome();
-  setInputMode("mic");
+  setInputMode(restoredInputMode());
   await refreshMicDevices();
   startNowPlayingPolling();
 
@@ -1122,9 +1178,8 @@ function applyPreparedTrackSource(
   loadedSourceKind = sourceKind;
   schedule = buildPhraseSchedule(prepared.show);
   lastPhraseId = null;
-  nowPlayingFallbackStartedAtMs = performance.now();
-  nowPlayingFallbackPhraseId = schedule[0]?.phrase.phrase_id ?? null;
   loadedWaveformToken = sourceKind === "now-playing" ? freshnessKey ?? prepared.track.audioUrl : prepared.track.audioUrl;
+  refreshNowPlayingDriver();
 
   if (isBrowserAudioTransportSource(sourceKind)) {
     ui.audio.src = prepared.track.audioUrl;
@@ -1277,6 +1332,7 @@ function startNowPlayingPolling(): void {
 }
 
 async function pollNowPlayingLoop(): Promise<void> {
+  nowPlayingPollInFlight = true;
   try {
     const status = await fetchNowPlayingStatus();
     nowPlayingStatus = status;
@@ -1290,13 +1346,77 @@ async function pollNowPlayingLoop(): Promise<void> {
       cueBoundaryReached: nowPlayingCueBoundaryReached
     });
     nowPlayingCueBoundaryReached = false;
+    refreshNowPlayingDriver(status);
+    if (status.observation) {
+      nowPlayingLastObservation = status.observation;
+    }
     await syncNowPlayingRuntime();
   } catch (error) {
     nowPlayingFetchError = error instanceof Error ? error.message : "Now Playing status failed.";
     renderNowPlayingSurface();
   } finally {
-    window.setTimeout(() => void pollNowPlayingLoop(), 1200);
+    nowPlayingPollInFlight = false;
+    // Recover asks for the next poll as soon as this one settles.
+    const delay = nowPlayingPollRequested ? 0 : 1200;
+    nowPlayingPollRequested = false;
+    nowPlayingPollTimer = window.setTimeout(() => {
+      nowPlayingPollTimer = null;
+      void pollNowPlayingLoop();
+    }, delay);
   }
+}
+
+/**
+ * Decides which driver owns Now Playing visuals right now and records the
+ * tracking state the next decision starts from. Only ever fed raw poll data;
+ * the held observation below must not look like fresh tracking.
+ */
+function refreshNowPlayingDriver(status: NowPlayingStatus | null = nowPlayingStatus): void {
+  const decision = resolveNowPlayingDriver({
+    activeShowId: nowPlayingSession.activeShowId,
+    status,
+    loadedShowId: nowPlayingLoadedShowId(),
+    tracking: nowPlayingTracking,
+    nowMs: performance.now()
+  });
+  nowPlayingTracking = decision.tracking;
+  nowPlayingDriver = decision.driver;
+}
+
+function nowPlayingLoadedShowId(): string | null {
+  return loadedSourceKind === "now-playing" ? loaded?.libraryTrack.id ?? null : null;
+}
+
+/**
+ * The status the playback clock should read.
+ *
+ * While the premade show rides out its tracking-loss grace window the backend
+ * reports no observation, so the last one seen is held in place: the show keeps
+ * running on its projected clock instead of snapping to the start of the track.
+ */
+function nowPlayingClockStatus(): NowPlayingStatus | null {
+  if (
+    nowPlayingDriver === "premade" &&
+    nowPlayingStatus &&
+    !nowPlayingStatus.observation &&
+    nowPlayingLastObservation
+  ) {
+    return { ...nowPlayingStatus, observation: nowPlayingLastObservation };
+  }
+  return nowPlayingStatus;
+}
+
+/** Runs a status poll as soon as the current one settles; Recover uses this. */
+function requestNowPlayingPollNow(): void {
+  if (nowPlayingPollInFlight) {
+    nowPlayingPollRequested = true;
+    return;
+  }
+  if (nowPlayingPollTimer !== null) {
+    window.clearTimeout(nowPlayingPollTimer);
+    nowPlayingPollTimer = null;
+  }
+  void pollNowPlayingLoop();
 }
 
 /** Tracks which track the deck follower currently holds a reference for. */
@@ -1320,7 +1440,7 @@ async function prepareDeckFollowing(): Promise<void> {
     !tempo ||
     // The source app is already reporting a real clock, so there is nothing
     // for the microphone to work out.
-    nowPlayingClockIsExact(nowPlayingStatus)
+    nowPlayingClockIsExact(nowPlayingClockStatus())
   ) {
     return;
   }

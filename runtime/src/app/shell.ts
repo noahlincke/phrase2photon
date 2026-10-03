@@ -127,6 +127,10 @@ export const SHELL_TEMPLATE = /* html */ `
               <div id="nowPlayingProgressFill" class="prepare-progress-fill"></div>
             </div>
             <div id="nowPlayingMeta" class="output-list" hidden></div>
+            <button id="nowPlayingRecover" class="wide" type="button">Recover</button>
+            <p class="hint">
+              Hand the room to the microphone and re-check the source app (shortcut: R).
+            </p>
           </div>
         </section>
 
