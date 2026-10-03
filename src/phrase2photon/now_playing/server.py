@@ -4,9 +4,11 @@ import copy
 import hashlib
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -610,22 +612,37 @@ def ensure_compiled_show(
         (cache_dir / FALLBACK_ANALYSIS_MARKER).write_text(f"tempo={FALLBACK_TEMPO}\n", encoding="utf-8")
     extraction_path = cache_dir / "wav-analysis.extraction.json"
     extraction_path.write_text(extraction.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "phrase2photon.cli",
-            "compile",
-            "--extraction-in",
-            str(extraction_path),
-            "--outdir",
-            str(show_dir),
-        ],
-        check=True,
-    )
+    compile_show_package(cache_dir, show_dir, extraction_path)
     _write_analysis_source_sidecar(show_dir, rekordbox)
     resolved.show_dir = show_dir
     return show_dir
+
+
+def compile_show_package(cache_dir: Path, show_dir: Path, extraction_path: Path) -> None:
+    """Compiles the extraction and swaps the finished show dir into place.
+
+    Compiling straight into the live show dir left a half-written show.json
+    behind when the compile died mid-write, so it runs in a staging dir beside
+    the show dir and the finished directory is renamed in; a failed compile
+    leaves the previous show untouched.
+    """
+    with tempfile.TemporaryDirectory(prefix="p2p-compile-", dir=cache_dir) as temp:
+        staging = Path(temp) / "show"
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "phrase2photon.cli",
+                "compile",
+                "--extraction-in",
+                str(extraction_path),
+                "--outdir",
+                str(staging),
+            ],
+            check=True,
+        )
+        shutil.rmtree(show_dir, ignore_errors=True)
+        os.replace(staging, show_dir)
 
 
 def _rekordbox_sections(

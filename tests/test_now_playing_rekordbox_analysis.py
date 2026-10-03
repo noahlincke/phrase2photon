@@ -188,6 +188,36 @@ def test_regridded_anlz_rebuilds_the_cached_show(tmp_path: Path, monkeypatch) ->
     assert sidecar["anlz_mtimes"] == {str(anlz): future}
 
 
+def test_failed_recompile_leaves_the_cached_show_intact(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    import phrase2photon.now_playing.server as server
+
+    audio_path, cache_root = _resolved_show(tmp_path)
+    anlz = tmp_path / "ANLZ0000.DAT"
+    anlz.write_bytes(b"anlz")
+    _patch_rekordbox(monkeypatch, _analysis(anlz, with_phrases=True))
+    _patch_analyzer(monkeypatch, 33.0)
+    resolved = _resolved(audio_path)
+
+    ensure_compiled_show(resolved, cache_root=cache_root)
+    show_json = cache_root / resolved.audio_identity / "show" / "show.json"
+    original = show_json.read_text()
+
+    future = anlz.stat().st_mtime + 100.0
+    os.utime(anlz, (future, future))  # force a recompile
+    monkeypatch.setattr(
+        server.subprocess,
+        "run",
+        lambda argv, **_: (_ for _ in ()).throw(subprocess.CalledProcessError(1, argv)),
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        ensure_compiled_show(resolved, cache_root=cache_root)
+
+    assert show_json.read_text() == original  # no half-written show was published
+
+
 def test_phrase_kind_mapping_follows_the_mood() -> None:
     assert _phrase_label(mood=1, kind=1) == ("Intro", "low")
     assert _phrase_label(mood=1, kind=2) == ("Build", "high")

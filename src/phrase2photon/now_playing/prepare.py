@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +33,7 @@ from phrase2photon.now_playing.server import (
     FALLBACK_ANALYSIS_MARKER,
     FALLBACK_TEMPO,
     audio_sha256_file,
+    compile_show_package,
     ensure_compiled_show,
     show_dir_for_identity,
 )
@@ -142,19 +142,7 @@ def ensure_show_for_recording(
         )
     extraction_path = cache_dir / "wav-analysis.extraction.json"
     extraction_path.write_text(extraction.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "phrase2photon.cli",
-            "compile",
-            "--extraction-in",
-            str(extraction_path),
-            "--outdir",
-            str(show_dir),
-        ],
-        check=True,
-    )
+    compile_show_package(cache_dir, show_dir, extraction_path)
     resolved.show_dir = show_dir
     return resolved
 
