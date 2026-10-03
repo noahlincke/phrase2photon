@@ -30,5 +30,8 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"phrase2photon.now_playing" = ["rekordbox_offsets.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

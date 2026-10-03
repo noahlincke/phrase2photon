@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import plistlib
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -34,8 +37,11 @@ _REKORDBOX_LAST_MEMORY_SAMPLES: dict[int, int] = {}
 _LAST_REKORDBOX_DIAGNOSTICS: SourceDiagnostics | None = None
 REKORDBOX_FULLY_BUFFERED_RATIO = 0.98
 REKORDBOX_CONTENT_EVENT_BASELINE_MAX_AGE_SECONDS = 30 * 60
-REKORDBOX_MEMORY_APP_PATH = Path.home() / "Applications" / "rekordbox 7.2.8" / "rekordbox.app" / "Contents" / "MacOS" / "rekordbox"
+REKORDBOX_MEMORY_DEFAULT_APP = Path("/Applications/rekordbox 7/rekordbox.app")
+REKORDBOX_MEMORY_OFFSETS_PATH = Path(__file__).resolve().parent / "rekordbox_offsets.json"
 REKORDBOX_MEMORY_PROBE_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "run_rekordbox_memory_probe.sh"
+_LAST_REKORDBOX_MEMORY_STATUS: str | None = None
+_REKORDBOX_ENTITLEMENT_CACHE: dict[tuple[str, int], bool] = {}
 
 
 @dataclass(frozen=True)
@@ -495,26 +501,160 @@ def _rekordbox_open_audio_state(*, runner: Runner = subprocess.run) -> dict[Path
     return open_state
 
 
-def _poll_rekordbox_memory_states(*, runner: Runner = subprocess.run) -> list[RekordboxMemoryDeckState]:
-    pid = _rekordbox_memory_probe_pid(runner=runner)
-    if pid is None or not REKORDBOX_MEMORY_PROBE_SCRIPT.exists():
-        return []
+def _rekordbox_app_bundle() -> Path:
+    override = os.environ.get("P2P_REKORDBOX_APP")
+    return Path(override) if override else REKORDBOX_MEMORY_DEFAULT_APP
+
+
+def _rekordbox_memory_binary_path(bundle: Path) -> Path:
+    return bundle / "Contents" / "MacOS" / "rekordbox"
+
+
+def _parse_rekordbox_version(raw: str) -> str | None:
+    parts = raw.strip().split(".")
+    if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
+        return None
+    return ".".join(parts[:3])
+
+
+def _rekordbox_app_version(bundle: Path) -> str | None:
+    try:
+        with (bundle / "Contents" / "Info.plist").open("rb") as handle:
+            info = plistlib.load(handle)
+    except OSError:
+        return None
+    raw = info.get("CFBundleShortVersionString")
+    if not isinstance(raw, str):
+        return None
+    return _parse_rekordbox_version(raw)
+
+
+@lru_cache(maxsize=1)
+def _rekordbox_memory_offsets() -> dict[str, Any]:
+    with REKORDBOX_MEMORY_OFFSETS_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+_REKORDBOX_CHAIN_FILE_TOKENS = {
+    "bpm": "bpm",
+    "sample_position": "sample",
+    "track_info": "track",
+    "anlz_path": "anlz",
+}
+
+
+def _rekordbox_chains_text(entry: dict[str, Any]) -> str:
+    lines = ["master 0 " + " ".join(entry["master_deck"])]
+    for deck in range(1, 5):
+        deck_entry = entry["decks"][str(deck)]
+        for key, token in _REKORDBOX_CHAIN_FILE_TOKENS.items():
+            lines.append(f"{token} {deck} " + " ".join(deck_entry[key]))
+    return "\n".join(lines) + "\n"
+
+
+def _rekordbox_chains_path(version: str) -> Path:
+    return Path(tempfile.gettempdir()) / f"phrase2photon-rekordbox-chains-{version}.txt"
+
+
+def _app_has_get_task_allow(bundle: Path, *, runner: Runner) -> bool:
     try:
         result = runner(
-            ["bash", str(REKORDBOX_MEMORY_PROBE_SCRIPT), str(pid)],
+            ["codesign", "-d", "--entitlements", "-", "--xml", str(bundle)],
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+    try:
+        entitlements = plistlib.loads(result.stdout)
+    except plistlib.InvalidFileException:
+        return False
+    return bool(entitlements.get("com.apple.security.get-task-allow"))
+
+
+def _rekordbox_app_is_resigned(bundle: Path, *, runner: Runner) -> bool:
+    try:
+        mtime = int(bundle.stat().st_mtime)
+    except OSError:
+        return False
+    key = (str(bundle), mtime)
+    cached = _REKORDBOX_ENTITLEMENT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    entitled = _app_has_get_task_allow(bundle, runner=runner)
+    _REKORDBOX_ENTITLEMENT_CACHE.clear()
+    _REKORDBOX_ENTITLEMENT_CACHE[key] = entitled
+    return entitled
+
+
+def last_rekordbox_memory_status() -> str | None:
+    return _LAST_REKORDBOX_MEMORY_STATUS
+
+
+def _set_rekordbox_memory_status(status: str) -> None:
+    global _LAST_REKORDBOX_MEMORY_STATUS
+    _LAST_REKORDBOX_MEMORY_STATUS = status
+
+
+def _poll_rekordbox_memory_states(*, runner: Runner = subprocess.run) -> list[RekordboxMemoryDeckState]:
+    if not REKORDBOX_MEMORY_PROBE_SCRIPT.exists():
+        _set_rekordbox_memory_status("probe-failed:missing-probe-script")
+        return []
+    pid = _rekordbox_memory_probe_pid(runner=runner)
+    if pid is None:
+        _set_rekordbox_memory_status("not-running")
+        return []
+    bundle = _rekordbox_app_bundle()
+    if not (bundle / "Contents" / "Info.plist").exists():
+        _set_rekordbox_memory_status("probe-failed:app-missing")
+        return []
+    version = _rekordbox_app_version(bundle)
+    if version is None:
+        _set_rekordbox_memory_status("probe-failed:version-unreadable")
+        return []
+    try:
+        offsets = _rekordbox_memory_offsets()
+    except FileNotFoundError:
+        _set_rekordbox_memory_status("probe-failed:offsets-missing")
+        return []
+    except json.JSONDecodeError:
+        _set_rekordbox_memory_status("probe-failed:offsets-invalid")
+        return []
+    entry = offsets.get(version)
+    if entry is None:
+        _set_rekordbox_memory_status(f"unsupported-version:{version}")
+        return []
+    if not _rekordbox_app_is_resigned(bundle, runner=runner):
+        _set_rekordbox_memory_status("not-resigned")
+        return []
+    chains_path = _rekordbox_chains_path(version)
+    chains_path.write_text(_rekordbox_chains_text(entry), encoding="utf-8")
+    try:
+        result = runner(
+            ["bash", str(REKORDBOX_MEMORY_PROBE_SCRIPT), str(pid), str(chains_path)],
             check=True,
             capture_output=True,
             text=True,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except FileNotFoundError:
+        _set_rekordbox_memory_status("probe-failed:bash-missing")
         return []
-    return _parse_rekordbox_memory_probe_output(result.stdout)
+    except subprocess.CalledProcessError as exc:
+        _set_rekordbox_memory_status(f"probe-failed:exit{exc.returncode}")
+        return []
+    states = _parse_rekordbox_memory_probe_output(result.stdout)
+    if not any(state.sample_position is not None for state in states):
+        _set_rekordbox_memory_status("probe-failed:unreadable")
+        return []
+    _set_rekordbox_memory_status("exact")
+    return states
 
 
 def _rekordbox_memory_probe_pid(*, runner: Runner = subprocess.run) -> int | None:
+    target = str(_rekordbox_memory_binary_path(_rekordbox_app_bundle()))
     try:
         pid_result = runner(
-            ["pgrep", "-f", str(REKORDBOX_MEMORY_APP_PATH)],
+            ["pgrep", "-f", target],
             check=True,
             capture_output=True,
             text=True,
@@ -533,7 +673,6 @@ def _rekordbox_memory_probe_pid(*, runner: Runner = subprocess.run) -> int | Non
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
-    target = str(REKORDBOX_MEMORY_APP_PATH)
     for line in ps_result.stdout.splitlines():
         parts = line.strip().split(maxsplit=1)
         if len(parts) != 2:
@@ -761,6 +900,7 @@ def _build_rekordbox_diagnostics(
     return SourceDiagnostics(
         source_app="Rekordbox",
         database_loaded=database_loaded,
+        memory_clock_status=_LAST_REKORDBOX_MEMORY_STATUS,
         selected_path=selected_candidate.path if selected_candidate is not None else None,
         selected_content_id=selected_candidate.record.content_id if selected_candidate and selected_candidate.record else None,
         selected_via=selected_via,

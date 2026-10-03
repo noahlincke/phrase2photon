@@ -2,7 +2,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import plistlib
+import pytest
+import subprocess
+
 from phrase2photon.now_playing import source_polling
+
+
+@pytest.fixture(autouse=True)
+def _isolated_rekordbox_memory_probe(monkeypatch) -> None:
+    monkeypatch.setenv("P2P_REKORDBOX_APP", "/nonexistent/phrase2photon-tests/rekordbox.app")
+    monkeypatch.setattr(source_polling, "_REKORDBOX_ENTITLEMENT_CACHE", {})
+    monkeypatch.setattr(source_polling, "_LAST_REKORDBOX_MEMORY_STATUS", None)
 
 
 class FakeQuery:
@@ -732,3 +743,209 @@ def test_apply_rekordbox_memory_clock_marks_paused_when_sample_position_freezes(
 
     assert first.is_playing is True
     assert second.is_playing is False
+
+
+def test_rekordbox_offsets_json_covers_known_versions() -> None:
+    offsets = source_polling._rekordbox_memory_offsets()
+    assert set(offsets) == {"7.2.8", "7.2.17", "7.2.18"}
+    for entry in offsets.values():
+        assert len(entry["master_deck"]) >= 2
+        assert set(entry["decks"]) == {"1", "2", "3", "4"}
+        for deck_entry in entry["decks"].values():
+            assert set(deck_entry) == {"bpm", "sample_position", "track_info", "anlz_path"}
+            for chain in deck_entry.values():
+                assert len(chain) >= 2
+                for token in chain:
+                    int(token, 16)
+
+
+def test_rekordbox_offsets_json_preserves_7_2_8_probe_constants() -> None:
+    entry = source_polling._rekordbox_memory_offsets()["7.2.8"]
+    assert entry["master_deck"] == ["04DCFD18", "20", "278", "124"]
+    assert entry["decks"]["1"]["bpm"] == ["04D8AA18", "0", "2C8", "188"]
+    assert entry["decks"]["1"]["sample_position"] == ["04D8AA18", "0", "2C8", "120"]
+    assert entry["decks"]["1"]["track_info"] == ["04D8AA18", "0", "270", "38", "80", "28", "F0", "4"]
+    assert entry["decks"]["1"]["anlz_path"] == ["04DD0708", "8", "3F0", "0"]
+    assert entry["decks"]["4"]["track_info"] == ["04D8AA18", "18", "270", "38", "48", "28", "F0", "4"]
+
+
+def test_parse_rekordbox_version_takes_first_three_components() -> None:
+    assert source_polling._parse_rekordbox_version("7.2.16.0342") == "7.2.16"
+    assert source_polling._parse_rekordbox_version("7.2.18") == "7.2.18"
+    assert source_polling._parse_rekordbox_version("7.2") is None
+    assert source_polling._parse_rekordbox_version("beta") is None
+
+
+def test_rekordbox_chains_text_matches_probe_line_format() -> None:
+    entry = source_polling._rekordbox_memory_offsets()["7.2.8"]
+    lines = source_polling._rekordbox_chains_text(entry).splitlines()
+    assert lines[0] == "master 0 04DCFD18 20 278 124"
+    assert "bpm 1 04D8AA18 0 2C8 188" in lines
+    assert "sample 4 04D8AA18 18 2C8 120" in lines
+    assert "anlz 4 04DD0708 20 3F0 0" in lines
+    assert len(lines) == 17
+
+
+def _write_test_rekordbox_app(tmp_path: Path, version: str) -> Path:
+    bundle = tmp_path / "rekordbox.app"
+    contents = bundle / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": version}))
+    binary = contents / "MacOS" / "rekordbox"
+    binary.parent.mkdir()
+    binary.write_bytes(b"MZ")
+    return bundle
+
+
+_PROBE_STDOUT = """
+pid=4242
+base=0x104134000
+master_deck=0
+deck_1:
+  bpm=126.301
+  sample_position=3591017
+  seconds=81.429
+  track_info=k Title: Test TrackArtist: Test ArtistAlbum: Test Album
+  title=Test Track
+  artist=Test Artist
+  album=Test Album
+  anlz_path=/Users/test/ANLZ0000.DAT
+""".strip()
+
+_UNREADABLE_PROBE_STDOUT = """
+pid=4242
+base=0x104134000
+master_deck=unreadable
+deck_1:
+  bpm=unreadable
+  sample_position=unreadable
+  track_info=unreadable
+  anlz_path=unreadable
+""".strip()
+
+
+class _FakeRekordboxRunner:
+    def __init__(
+        self,
+        *,
+        binary_path: str,
+        pgrep_pids: str | None = "4242",
+        entitlements: bytes | None = None,
+        probe_result: subprocess.CompletedProcess[str] | Exception | None = None,
+    ) -> None:
+        self.binary_path = binary_path
+        self.pgrep_pids = pgrep_pids
+        self.entitlements = entitlements
+        self.probe_result = probe_result
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        self.calls.append(argv)
+        if argv[0] == "pgrep":
+            if self.pgrep_pids is None:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=self.pgrep_pids, stderr="")
+        if argv[0] == "ps":
+            return subprocess.CompletedProcess(argv, 0, stdout=f"4242 {self.binary_path}", stderr="")
+        if argv[0] == "codesign":
+            if self.entitlements is None:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=self.entitlements, stderr=b"")
+        if argv[0] == "bash":
+            if isinstance(self.probe_result, Exception):
+                raise self.probe_result
+            return self.probe_result
+        raise AssertionError(f"Unexpected command: {argv}")
+
+
+def test_memory_status_not_running_when_no_rekordbox_process() -> None:
+    runner = _FakeRekordboxRunner(binary_path="unused", pgrep_pids=None)
+    assert source_polling._poll_rekordbox_memory_states(runner=runner) == []
+    assert source_polling.last_rekordbox_memory_status() == "not-running"
+
+
+def test_memory_status_unsupported_version_skips_entitlement_check(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_test_rekordbox_app(tmp_path, "9.9.9")
+    monkeypatch.setenv("P2P_REKORDBOX_APP", str(bundle))
+    runner = _FakeRekordboxRunner(binary_path=str(bundle / "Contents" / "MacOS" / "rekordbox"))
+    assert source_polling._poll_rekordbox_memory_states(runner=runner) == []
+    assert source_polling.last_rekordbox_memory_status() == "unsupported-version:9.9.9"
+    assert all(argv[0] != "codesign" for argv in runner.calls)
+
+
+def test_memory_status_not_resigned_without_get_task_allow(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_test_rekordbox_app(tmp_path, "7.2.18")
+    monkeypatch.setenv("P2P_REKORDBOX_APP", str(bundle))
+    runner = _FakeRekordboxRunner(
+        binary_path=str(bundle / "Contents" / "MacOS" / "rekordbox"),
+        entitlements=plistlib.dumps({"com.apple.security.get-task-allow": False}),
+    )
+    assert source_polling._poll_rekordbox_memory_states(runner=runner) == []
+    assert source_polling.last_rekordbox_memory_status() == "not-resigned"
+
+
+def test_memory_status_not_resigned_when_codesign_fails(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_test_rekordbox_app(tmp_path, "7.2.18")
+    monkeypatch.setenv("P2P_REKORDBOX_APP", str(bundle))
+    runner = _FakeRekordboxRunner(binary_path=str(bundle / "Contents" / "MacOS" / "rekordbox"))
+    assert source_polling._poll_rekordbox_memory_states(runner=runner) == []
+    assert source_polling.last_rekordbox_memory_status() == "not-resigned"
+
+
+def test_memory_status_exact_passes_chains_file_to_probe(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_test_rekordbox_app(tmp_path, "7.2.18")
+    monkeypatch.setenv("P2P_REKORDBOX_APP", str(bundle))
+    probe_result = subprocess.CompletedProcess(["bash"], 0, stdout=_PROBE_STDOUT, stderr="")
+    runner = _FakeRekordboxRunner(
+        binary_path=str(bundle / "Contents" / "MacOS" / "rekordbox"),
+        entitlements=plistlib.dumps({"com.apple.security.get-task-allow": True}),
+        probe_result=probe_result,
+    )
+    states = source_polling._poll_rekordbox_memory_states(runner=runner)
+    assert source_polling.last_rekordbox_memory_status() == "exact"
+    assert [state.deck for state in states] == [1]
+    assert states[0].sample_position == 3591017
+    probe_call = next(argv for argv in runner.calls if argv[0] == "bash")
+    assert probe_call[1] == str(source_polling.REKORDBOX_MEMORY_PROBE_SCRIPT)
+    assert probe_call[2] == "4242"
+    assert probe_call[3].endswith("phrase2photon-rekordbox-chains-7.2.18.txt")
+    assert Path(probe_call[3]).read_text() == source_polling._rekordbox_chains_text(
+        source_polling._rekordbox_memory_offsets()["7.2.18"]
+    )
+
+
+def test_memory_status_probe_failed_on_probe_exit(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_test_rekordbox_app(tmp_path, "7.2.18")
+    monkeypatch.setenv("P2P_REKORDBOX_APP", str(bundle))
+    runner = _FakeRekordboxRunner(
+        binary_path=str(bundle / "Contents" / "MacOS" / "rekordbox"),
+        entitlements=plistlib.dumps({"com.apple.security.get-task-allow": True}),
+        probe_result=subprocess.CalledProcessError(1, ["bash"]),
+    )
+    assert source_polling._poll_rekordbox_memory_states(runner=runner) == []
+    assert source_polling.last_rekordbox_memory_status() == "probe-failed:exit1"
+
+
+def test_memory_status_probe_failed_when_decks_unreadable(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_test_rekordbox_app(tmp_path, "7.2.18")
+    monkeypatch.setenv("P2P_REKORDBOX_APP", str(bundle))
+    probe_result = subprocess.CompletedProcess(["bash"], 0, stdout=_UNREADABLE_PROBE_STDOUT, stderr="")
+    runner = _FakeRekordboxRunner(
+        binary_path=str(bundle / "Contents" / "MacOS" / "rekordbox"),
+        entitlements=plistlib.dumps({"com.apple.security.get-task-allow": True}),
+        probe_result=probe_result,
+    )
+    assert source_polling._poll_rekordbox_memory_states(runner=runner) == []
+    assert source_polling.last_rekordbox_memory_status() == "probe-failed:unreadable"
+
+
+def test_rekordbox_diagnostics_include_memory_clock_status(monkeypatch) -> None:
+    monkeypatch.setattr(source_polling, "_LAST_REKORDBOX_MEMORY_STATUS", "not-resigned")
+    diagnostics = source_polling._build_rekordbox_diagnostics(
+        database_loaded=False,
+        recent_events=[],
+        ranked_candidates=[],
+        selected_candidate=None,
+        selected_via=None,
+    )
+    assert diagnostics.memory_clock_status == "not-resigned"

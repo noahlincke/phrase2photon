@@ -50,6 +50,7 @@ class OpenAudioCandidateDiagnostic(BaseModel):
 class SourceDiagnostics(BaseModel):
     source_app: str
     database_loaded: bool
+    memory_clock_status: str | None = None
     selected_path: Path | None = None
     selected_content_id: str | None = None
     selected_via: str | None = None
