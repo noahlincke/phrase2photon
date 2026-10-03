@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { barBeatToBeat, buildPhraseSchedule, playbackStateAt } from "../runtime/schedule.js";
+import { gridFor } from "../show/beatGrid.js";
 import type { ShowPackage } from "../show/types.js";
 
 const show: ShowPackage = {
@@ -64,7 +65,7 @@ describe("phrase schedule", () => {
     expect(schedule[0].startSeconds).toBe(0);
     expect(schedule[1].startSeconds).toBe(8);
 
-    const playback = playbackStateAt(schedule, 8.25, 120);
+    const playback = playbackStateAt(schedule, 8.25, gridFor(show));
     expect(playback.active.phrase.phrase_id).toBe("phrase_b");
     expect(playback.bar).toBe(5);
   });

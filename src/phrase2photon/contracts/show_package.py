@@ -5,12 +5,23 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class TempoMapSegment(BaseModel):
+    # Segments are sorted by start_seconds and the first starts at 0. A later
+    # segment's downbeat_seconds may predate its start_seconds: its grid
+    # extends backwards, and the downbeat must land on a whole bar of the
+    # continuing beat count.
+    start_seconds: float = Field(ge=0.0)
+    bpm: float = Field(gt=0.0)
+    downbeat_seconds: float
+
+
 class SongMeta(BaseModel):
     song_id: str
     title: str
     artist: str | None = None
     tempo: float
     time_signature: str
+    tempo_map: list[TempoMapSegment] | None = None
 
 
 class LocatorRef(BaseModel):

@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const TempoMapSegmentSchema = z.object({
+  start_seconds: z.number().min(0),
+  bpm: z.number().positive(),
+  downbeat_seconds: z.number()
+});
+
 export const ShowPackageSchema = z.object({
   version: z.literal("0.1.0"),
   song: z.object({
@@ -7,7 +13,8 @@ export const ShowPackageSchema = z.object({
     title: z.string(),
     artist: z.string().nullable(),
     tempo: z.number().positive(),
-    time_signature: z.string()
+    time_signature: z.string(),
+    tempo_map: z.array(TempoMapSegmentSchema).nullish()
   }),
   phrases: z.array(
     z.object({

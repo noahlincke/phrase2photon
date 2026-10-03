@@ -2,12 +2,21 @@ export type EnergyLevel = "low" | "mid" | "high" | "peak";
 export type TransitionType = "cut" | "fade" | "strobe-hit" | "hold" | "ramp";
 export type PresetModeSupport = "deterministic" | "live-rotation";
 
+export interface BeatGridSegment {
+  /** Segment is active from this time; the first segment starts at 0. */
+  start_seconds: number;
+  bpm: number;
+  /** Time of a bar-1 downbeat on this segment's grid. */
+  downbeat_seconds: number;
+}
+
 export interface SongMeta {
   song_id: string;
   title: string;
   artist: string | null;
   tempo: number;
   time_signature: string;
+  tempo_map?: BeatGridSegment[] | null;
 }
 
 export interface LocatorRef {
