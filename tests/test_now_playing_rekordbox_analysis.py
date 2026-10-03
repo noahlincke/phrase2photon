@@ -1,10 +1,13 @@
 import json
 import os
+import sys
+import types
 import wave
 from pathlib import Path
 
 import pytest
 
+import phrase2photon.now_playing.rekordbox_analysis as rekordbox_analysis
 from phrase2photon.contracts.show_package import ShowPackage, TempoMapSegment
 from phrase2photon.now_playing.rekordbox_analysis import (
     RekordboxAnalysis,
@@ -229,5 +232,159 @@ def test_snap_sections_to_bar_grid_keeps_the_map_tiling() -> None:
     assert [section["start_seconds"] for section in snapped] == [0.5, 8.5]
     assert [section["end_seconds"] for section in snapped] == [8.5, 32.5]
     assert sections[0]["end_seconds"] == 9.3  # the input is not mutated
+
+
+def test_snap_sections_to_bar_grid_drops_sections_collapsed_onto_one_bar() -> None:
+    analysis = _analysis(Path("/unused.DAT"), with_phrases=False)
+    sections = [
+        {"label": "intro", "energy": "low", "start_seconds": 0.0, "end_seconds": 8.3},
+        {"label": "blip", "energy": "mid", "start_seconds": 8.3, "end_seconds": 8.7},
+        {"label": "groove", "energy": "mid", "start_seconds": 8.7, "end_seconds": 33.0},
+    ]
+
+    snapped = snap_sections_to_bar_grid(sections, analysis)
+
+    # 8.3 and 8.7 both snap to the 8.5 bar, which would hand the compiler a
+    # zero-length phrase; it is dropped and the map still tiles the track.
+    assert [section["label"] for section in snapped] == ["intro", "groove"]
+    assert [section["start_seconds"] for section in snapped] == [0.5, 8.5]
+    assert [section["end_seconds"] for section in snapped] == [8.5, 32.5]
+
+
+def test_load_rekordbox_analysis_caches_until_files_change(tmp_path, monkeypatch) -> None:
+    db = tmp_path / "master.db"
+    db.write_bytes(b"db")
+    anlz = tmp_path / "ANLZ0000.DAT"
+    anlz.write_bytes(b"anlz")
+    analysis = _analysis(anlz, with_phrases=True)
+    monkeypatch.setattr(rekordbox_analysis, "_ANALYSIS_CACHE", {})
+    monkeypatch.setattr(rekordbox_analysis, "_rekordbox_db_path", lambda: db)
+    calls: list[Path] = []
+
+    def fake_with_content(audio_path, use_content):
+        calls.append(Path(audio_path))
+        return analysis.tempo_map, analysis.phrases, analysis.bar_times, analysis.anlz_files
+
+    monkeypatch.setattr(rekordbox_analysis, "_with_rekordbox_content", fake_with_content)
+
+    track = tmp_path / "Track.wav"
+    first = rekordbox_analysis.load_rekordbox_analysis(track)
+    assert rekordbox_analysis.load_rekordbox_analysis(track) is first
+    assert calls == [track]  # the second call skips the database entirely
+
+    rekordbox_analysis.load_rekordbox_analysis(tmp_path / "Other.wav")
+    assert len(calls) == 2  # other files still get their own lookup
+
+    future = anlz.stat().st_mtime + 100.0
+    os.utime(anlz, (future, future))
+    rekordbox_analysis.load_rekordbox_analysis(track)
+    assert len(calls) == 3  # Noah re-gridded the ANLZ: re-query
+
+    db_future = db.stat().st_mtime + 100.0
+    os.utime(db, (db_future, db_future))
+    rekordbox_analysis.load_rekordbox_analysis(track)
+    assert len(calls) == 4  # master.db changed: re-query
+
+
+def test_load_rekordbox_analysis_caches_collection_misses(tmp_path, monkeypatch) -> None:
+    db = tmp_path / "master.db"
+    db.write_bytes(b"db")
+    monkeypatch.setattr(rekordbox_analysis, "_ANALYSIS_CACHE", {})
+    monkeypatch.setattr(rekordbox_analysis, "_rekordbox_db_path", lambda: db)
+    calls: list[Path] = []
+
+    def fake_with_content(audio_path, use_content):
+        calls.append(Path(audio_path))
+        return None
+
+    monkeypatch.setattr(rekordbox_analysis, "_with_rekordbox_content", fake_with_content)
+
+    track = tmp_path / "Provider Track.wav"
+    assert rekordbox_analysis.load_rekordbox_analysis(track) is None
+    assert rekordbox_analysis.load_rekordbox_analysis(track) is None
+    assert len(calls) == 1  # a track the collection can never match is not re-copied
+
+
+class _FakeQuery:
+    def __init__(self, content: object) -> None:
+        self._content = content
+
+    def filter(self, *_args: object) -> "_FakeQuery":
+        return self
+
+    def first(self) -> object:
+        return self._content
+
+
+class _FakeSession:
+    def __init__(self, content: object) -> None:
+        self._content = content
+        self.closed = False
+
+    def query(self, *_args: object) -> _FakeQuery:
+        return _FakeQuery(self._content)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeRekordboxDatabase:
+    """Stands in for Rekordbox6Database; the first `fail_opens` opens raise."""
+
+    opens = 0
+    fail_opens = 0
+    content: object = None
+
+    def __init__(self, *, path, db_dir, unlock) -> None:
+        _FakeRekordboxDatabase.opens += 1
+        if _FakeRekordboxDatabase.opens <= _FakeRekordboxDatabase.fail_opens:
+            raise RuntimeError("file is not a database")
+        self.session = _FakeSession(_FakeRekordboxDatabase.content)
+
+
+def _install_fake_pyrekordbox(monkeypatch, *, fail_opens: int) -> None:
+    module = types.ModuleType("pyrekordbox")
+    module.Rekordbox6Database = _FakeRekordboxDatabase
+    tables = types.ModuleType("pyrekordbox.db6.tables")
+    tables.DjmdContent = types.SimpleNamespace(FolderPath="FolderPath")
+    monkeypatch.setitem(sys.modules, "pyrekordbox", module)
+    monkeypatch.setitem(sys.modules, "pyrekordbox.db6", types.ModuleType("pyrekordbox.db6"))
+    monkeypatch.setitem(sys.modules, "pyrekordbox.db6.tables", tables)
+
+
+def test_rekordbox_db_copy_is_retried_once_when_it_fails_to_open(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "master.db"
+    db_path.write_bytes(b"db")
+    monkeypatch.setattr(rekordbox_analysis, "_rekordbox_db_path", lambda: db_path)
+    _FakeRekordboxDatabase.opens = 0
+    _FakeRekordboxDatabase.fail_opens = 1
+    _FakeRekordboxDatabase.content = types.SimpleNamespace(AnalysisDataPath="/grid/ANLZ0000.DAT")
+    _install_fake_pyrekordbox(monkeypatch, fail_opens=1)
+
+    result = rekordbox_analysis._with_rekordbox_content(
+        Path("/music/Track.wav"), lambda content, database: ("parsed", content)
+    )
+
+    assert result == ("parsed", _FakeRekordboxDatabase.content)
+    assert _FakeRekordboxDatabase.opens == 2  # one torn copy, then a clean one
+
+
+def test_rekordbox_db_copy_failure_surfaces_after_the_retry(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "master.db"
+    db_path.write_bytes(b"db")
+    monkeypatch.setattr(rekordbox_analysis, "_rekordbox_db_path", lambda: db_path)
+    _FakeRekordboxDatabase.opens = 0
+    _FakeRekordboxDatabase.fail_opens = 2
+    _install_fake_pyrekordbox(monkeypatch, fail_opens=2)
+
+    with pytest.raises(RuntimeError):
+        rekordbox_analysis._with_rekordbox_content(
+            Path("/music/Track.wav"), lambda content, database: content
+        )
+    assert _FakeRekordboxDatabase.opens == 2
 
 

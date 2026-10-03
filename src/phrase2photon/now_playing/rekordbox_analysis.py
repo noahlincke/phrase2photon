@@ -38,12 +38,20 @@ class RekordboxAnalysis:
     bar_times: tuple[float, ...]
 
 
+# Parsed analysis per audio file, valid until master.db or the track's ANLZ
+# files change. Keyed on (audio path, database path); entries carry the
+# database mtime and the ANLZ mtimes the result was built from.
+_ANALYSIS_CACHE: dict[tuple[str, str], tuple[float, dict[str, float], RekordboxAnalysis | None]] = {}
+
+
 def snap_sections_to_bar_grid(sections, analysis: RekordboxAnalysis) -> list[dict]:
     """Moves every section boundary to the nearest rekordbox bar (beat 1).
 
     Adjacent sections share the snapped boundary so the map still tiles the
     track; material before the first bar is part of the first phrase because
-    bar|beat clamps it to 1|1.
+    bar|beat clamps it to 1|1. Boundaries closer together than half a bar can
+    snap onto the same bar, so they are forced non-decreasing afterwards and
+    sections that collapsed onto zero length are dropped.
     """
     snapped = [dict(section) for section in sections]
     boundaries = [float(section["start_seconds"]) for section in snapped]
@@ -52,25 +60,51 @@ def snap_sections_to_bar_grid(sections, analysis: RekordboxAnalysis) -> list[dic
         min(analysis.bar_times, key=lambda bar_time: abs(bar_time - boundary))
         for boundary in boundaries
     ]
-    for index, section in enumerate(snapped):
-        section["start_seconds"] = snapped_boundaries[index]
-        section["end_seconds"] = snapped_boundaries[index + 1]
-    return snapped
+    for index in range(1, len(snapped_boundaries)):
+        snapped_boundaries[index] = max(snapped_boundaries[index], snapped_boundaries[index - 1])
+    return [
+        {**section, "start_seconds": start, "end_seconds": end}
+        for section, start, end in zip(snapped, snapped_boundaries, snapped_boundaries[1:])
+        if end > start
+    ]
 
 
 def load_rekordbox_analysis(audio_path: Path) -> RekordboxAnalysis | None:
     """Finds the Rekordbox content for this exact file and parses its ANLZ.
 
     Returns None when the file is not in the collection or has no beat grid,
-    which is the normal case for provider-downloaded tracks.
+    which is the normal case for provider-downloaded tracks. Results are
+    cached per file until master.db or the track's ANLZ files change, so
+    repeated preparations do not re-copy the database.
     """
+    db_path = _rekordbox_db_path()
+    if db_path is None:
+        return None
+    key = (str(audio_path), str(db_path))
+    db_mtime = db_path.stat().st_mtime
+    cached = _ANALYSIS_CACHE.get(key)
+    if cached is not None and cached[0] == db_mtime and _anlz_mtimes_unchanged(cached[1]):
+        return cached[2]
+
+    analysis: RekordboxAnalysis | None = None
+    anlz_mtimes: dict[str, float] = {}
     found = _with_rekordbox_content(audio_path, _analyse_content)
-    if found is None:
-        return None
-    tempo_map, phrases, bar_times, anlz_files = found
-    if not tempo_map:
-        return None
-    return RekordboxAnalysis(tempo_map=tempo_map, phrases=phrases, bar_times=bar_times, anlz_files=anlz_files)
+    if found is not None:
+        tempo_map, phrases, bar_times, anlz_files = found
+        if tempo_map:
+            analysis = RekordboxAnalysis(
+                tempo_map=tempo_map, phrases=phrases, bar_times=bar_times, anlz_files=anlz_files
+            )
+        anlz_mtimes = {str(path): path.stat().st_mtime for path in anlz_files}
+    _ANALYSIS_CACHE[key] = (db_mtime, anlz_mtimes, analysis)
+    return analysis
+
+
+def _anlz_mtimes_unchanged(mtimes: dict[str, float]) -> bool:
+    try:
+        return all(Path(path).stat().st_mtime == mtime for path, mtime in mtimes.items())
+    except OSError:
+        return False
 
 
 def _with_rekordbox_content(audio_path, use_content):
@@ -85,19 +119,28 @@ def _with_rekordbox_content(audio_path, use_content):
     from pyrekordbox import Rekordbox6Database
     import pyrekordbox.db6.tables as tables
 
-    with tempfile.TemporaryDirectory(prefix="p2p-rekordbox-") as temp:
-        copied = Path(temp) / "master.db"
-        shutil.copy2(db_path, copied)
-        database = Rekordbox6Database(path=copied, db_dir=db_path.parent, unlock=True)
-        try:
-            content = database.session.query(tables.DjmdContent).filter(
-                tables.DjmdContent.FolderPath == str(audio_path)
-            ).first()
-            if content is None or not content.AnalysisDataPath:
-                return None
-            return use_content(content, database)
-        finally:
-            database.session.close()
+    # A copy taken mid-WAL-checkpoint can be torn and fail to open; re-copy
+    # once before giving up on the preparation.
+    for attempt in range(2):
+        with tempfile.TemporaryDirectory(prefix="p2p-rekordbox-") as temp:
+            copied = Path(temp) / "master.db"
+            shutil.copy2(db_path, copied)
+            try:
+                database = Rekordbox6Database(path=copied, db_dir=db_path.parent, unlock=True)
+            except Exception:
+                if attempt:
+                    raise
+                continue
+            try:
+                content = database.session.query(tables.DjmdContent).filter(
+                    tables.DjmdContent.FolderPath == str(audio_path)
+                ).first()
+                if content is None or not content.AnalysisDataPath:
+                    return None
+                return use_content(content, database)
+            finally:
+                database.session.close()
+    return None
 
 
 def _rekordbox_db_path() -> Path | None:
