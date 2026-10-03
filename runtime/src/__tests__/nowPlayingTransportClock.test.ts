@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deckCueBpm,
+  deckPitchRatio,
   heldClockStatus,
   heldFromStatus,
   isBrowserAudioTransportSource,
@@ -256,6 +257,10 @@ describe("deck bpm consumers", () => {
 
   it("paces premade cue speed with the deck's effective bpm", () => {
     expect(deckCueBpm("now-playing", 123, 120)).toBe(123);
+    // A deck grid an octave off stays on the show's octave after folding.
+    expect(deckCueBpm("now-playing", 246, 120)).toBe(123);
+    expect(deckCueBpm("now-playing", 61.5, 120)).toBe(123);
+    expect(deckCueBpm("now-playing", 200, 120)).toBe(120);
   });
 
   it("falls back to the show tempo without a usable deck bpm", () => {
@@ -263,5 +268,27 @@ describe("deck bpm consumers", () => {
     expect(deckCueBpm("now-playing", 0, 120)).toBe(120);
     expect(deckCueBpm("library", 123, 120)).toBe(120);
     expect(deckCueBpm(null, 123, 120)).toBe(120);
+  });
+});
+
+describe("deckPitchRatio", () => {
+  it("keeps a small pitch offset", () => {
+    expect(deckPitchRatio(123, 120)).toBeCloseTo(1.025, 5);
+  });
+
+  it("folds half/double grid mismatches into the show's octave", () => {
+    expect(deckPitchRatio(246, 120)).toBeCloseTo(1.025, 5);
+    expect(deckPitchRatio(61.5, 120)).toBeCloseTo(1.025, 5);
+  });
+
+  it("rejects a ratio beyond rekordbox's tempo range after folding", () => {
+    expect(deckPitchRatio(200, 120)).toBe(1);
+  });
+
+  it("rejects unusable deck bpm reads", () => {
+    expect(deckPitchRatio(null, 120)).toBe(1);
+    expect(deckPitchRatio(0, 120)).toBe(1);
+    expect(deckPitchRatio(NaN, 120)).toBe(1);
+    expect(deckPitchRatio(Infinity, 120)).toBe(1);
   });
 });

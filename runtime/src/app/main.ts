@@ -50,6 +50,7 @@ import {
 } from "../nowPlaying/handoff.js";
 import {
   deckCueBpm,
+  deckPitchRatio,
   heldClockStatus,
   heldFromStatus,
   isBrowserAudioTransportSource,
@@ -1512,9 +1513,7 @@ async function pollNowPlayingClockLoop(): Promise<void> {
  */
 function nowPlayingDeckRate(): number {
   const tempo = loadedSourceKind === "now-playing" ? loaded?.show.song.tempo ?? null : null;
-  return tempo !== null && tempo > 0 && nowPlayingClockBpm !== null
-    ? nowPlayingClockBpm / tempo
-    : 1;
+  return tempo !== null ? deckPitchRatio(nowPlayingClockBpm, tempo) : 1;
 }
 
 /**

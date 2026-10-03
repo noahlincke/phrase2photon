@@ -82,19 +82,51 @@ export function resolveNowPlayingPlaybackSeconds(
 }
 
 /**
+ * The deck's pitch as a ratio against the show's tempo.
+ *
+ * A deck bpm read can land in a different octave than the analysed show
+ * (half/double grids), so the raw ratio is folded by powers of two into
+ * [0.75, 1.5) first; anything still beyond rekordbox's ±16% tempo range —
+ * or an unusable bpm read — falls back to un-pitched 1.0.
+ */
+export function deckPitchRatio(deckBpm: number | null, showBpm: number): number {
+  if (
+    deckBpm === null ||
+    !Number.isFinite(deckBpm) ||
+    !Number.isFinite(showBpm) ||
+    deckBpm <= 0 ||
+    showBpm <= 0
+  ) {
+    return 1;
+  }
+  let ratio = deckBpm / showBpm;
+  while (ratio >= 1.5) {
+    ratio /= 2;
+  }
+  while (ratio < 0.75) {
+    ratio *= 2;
+  }
+  return ratio >= 0.84 && ratio < 1.16 ? ratio : 1;
+}
+
+/**
  * The bpm a premade laser frame paces its cue speed with.
  *
  * A deck pitched away from the show's original tempo burns source seconds
  * faster than the tempo map assumes, so the FB4 cue-speed channel should
  * carry the deck's effective bpm — but only in now-playing mode with a deck
- * sample to read; library playback already owns its transport.
+ * sample to read, scaled back into the show's octave, since library
+ * playback already owns its transport.
  */
 export function deckCueBpm(
   sourceKind: LoadedSourceKind | null,
   deckBpm: number | null,
   showBpm: number
 ): number {
-  return sourceKind === "now-playing" && deckBpm !== null && deckBpm > 0 ? deckBpm : showBpm;
+  if (sourceKind !== "now-playing") {
+    return showBpm;
+  }
+  return Math.round(showBpm * deckPitchRatio(deckBpm, showBpm));
 }
 
 export function resolveNowPlayingPlaybackDurationSeconds(
