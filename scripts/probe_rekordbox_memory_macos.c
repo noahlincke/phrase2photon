@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach/thread_policy.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -246,16 +247,51 @@ static void copy_sanitized_field(const char *raw, const char *label, const char 
   copy_sanitized_string(field, out, out_size);
 }
 
+// Sleeps until an absolute CLOCK_MONOTONIC_RAW deadline, looping because
+// nanosleep can return early on signals.
+static void sleep_until_ns(uint64_t deadline_ns) {
+  for (;;) {
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (now >= deadline_ns) return;
+    uint64_t remaining = deadline_ns - now;
+    struct timespec pause = {remaining / 1000000000ull,
+                             (long)(remaining % 1000000000ull)};
+    nanosleep(&pause, NULL);
+  }
+}
+
 // Streams one compact tick per interval with every deck's playhead, plus a
 // track line whenever a deck's track changes. Exits non-zero once the task
 // port dies (Rekordbox quit) so the consumer can respawn against the new pid.
 static int run_stream(const process_ctx_t *ctx, int interval_ms) {
+  // On this host, default timer coalescing stretches any sleep over ~10ms to
+  // 85-125ms (a 50ms sleep wakes ~120ms late), tripling the tick period. The
+  // time-constraint policy opts this thread out of coalescing so nanosleep
+  // lands on its deadline; it is a per-thread hint, so it costs no CPU while
+  // sleeping.
+  struct thread_time_constraint_policy tc = {
+      .period = 0, .computation = 5000, .constraint = 10000, .preemptible = 0};
+  kern_return_t tcr = thread_policy_set(mach_thread_self(),
+                                        THREAD_TIME_CONSTRAINT_POLICY,
+                                        (thread_policy_t)&tc,
+                                        THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+  if (tcr != KERN_SUCCESS) {
+    fprintf(stderr, "time-constraint policy unavailable: %s\n",
+            mach_error_string(tcr));
+  }
+
   char last_track[REKORDBOX_DECK_COUNT][256];
   memset(last_track, 0, sizeof(last_track));
   char title[160];
   char artist[160];
   char anlz[512];
   char anlz_raw[512];
+
+  // Tick on an absolute schedule so the period is interval_ms regardless of
+  // how long a tick's reads take; if a tick falls behind, the next deadline
+  // moves out so we never tick back-to-back.
+  uint64_t interval_ns = (uint64_t)interval_ms * 1000000ull;
+  uint64_t deadline = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + interval_ns;
 
   for (;;) {
     uint64_t liveness = 0;
@@ -312,8 +348,9 @@ static int run_stream(const process_ctx_t *ctx, int interval_ms) {
     printf("\n");
     fflush(stdout);
 
-    struct timespec pause = {interval_ms / 1000, (long)(interval_ms % 1000) * 1000000L};
-    nanosleep(&pause, NULL);
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    deadline = now >= deadline ? now + interval_ns : deadline + interval_ns;
+    sleep_until_ns(deadline);
   }
 }
 
