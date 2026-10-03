@@ -11,6 +11,7 @@ import {
   buildFb4ColorScrollFrame,
   buildFb4CueControlFrame,
   buildFb4CueFrame,
+  buildFb4FadeOverlayFrame,
   buildFb4LegacyCueFrame,
   buildFb4ZoneFrame,
   fb4CueRequires39Channel,
@@ -68,6 +69,7 @@ const STORAGE = {
   brightnessOverride: "p2p.dmx.brightnessOverride",
   brightnessOn: "p2p.dmx.brightnessOn",
   beatLooks: "p2p.dmx.beatLooks",
+  dimmerFades: "p2p.dmx.dimmerFades",
   latencyMs: "p2p.dmx.latencyMs",
   geometryOverride: "p2p.dmx.geometryOverride",
   rekordboxMute: "p2p.dmx.rekordboxLineFaderMute",
@@ -160,6 +162,7 @@ export class LaserConsole {
     this.input("universe").value = localStorage.getItem(STORAGE.universe) || "0";
     this.input("brightnessOverride").checked = localStorage.getItem(STORAGE.brightnessOverride) === "true";
     this.input("beatLooks").checked = localStorage.getItem(STORAGE.beatLooks) !== "false";
+    this.input("dimmerFades").checked = localStorage.getItem(STORAGE.dimmerFades) !== "false";
     this.input("latencyMs").value = localStorage.getItem(STORAGE.latencyMs) || "0";
     this.element.latencyValue.textContent = this.input("latencyMs").value;
     this.input("rekordboxMute").checked = localStorage.getItem(STORAGE.rekordboxMute) === "true";
@@ -219,6 +222,7 @@ export class LaserConsole {
     persistToggle("brightnessOverride", STORAGE.brightnessOverride);
     persistToggle("brightnessOn", STORAGE.brightnessOn);
     persistToggle("beatLooks", STORAGE.beatLooks);
+    persistToggle("dimmerFades", STORAGE.dimmerFades);
     persistToggle("geometryOverride", STORAGE.geometryOverride);
     persistToggle("rekordboxMute", STORAGE.rekordboxMute);
     persistToggle("holdForever", STORAGE.holdForever);
@@ -252,6 +256,13 @@ export class LaserConsole {
     this.element.cueSweep.addEventListener("click", () => {
       void this.runSequence(
         [1, 2, 3, 4, 5, 6, 7, 8].map((cue) => this.named(buildFb4CueFrame(cue, this.deps.currentBpm())))
+      );
+    });
+    this.element.fadeTest.addEventListener("click", () => {
+      void this.runSequence(
+        [0, 64, 128, 192, 255, 128].map((dimmer) =>
+          buildFb4FadeOverlayFrame(dimmer, this.deps.currentBpm())
+        )
       );
     });
     this.element.colorOriginal.addEventListener("click", () => {
@@ -305,6 +316,11 @@ export class LaserConsole {
   /** Whether beat-timed looks (drop hits, build ramps, accents) run on show frames. */
   get beatLooksEnabled(): boolean {
     return this.input("beatLooks").checked;
+  }
+
+  /** Whether looks may use dimmer fades as variety accents (strict 0/255 when off). */
+  get dimmerFadesEnabled(): boolean {
+    return this.input("dimmerFades").checked;
   }
 
   /** Output latency compensation in ms; beat-timed events fire this much early. */
@@ -483,7 +499,7 @@ export class LaserConsole {
   }
 
   private setSequenceButtonsDisabled(disabled: boolean): void {
-    for (const name of ["blackout", "cueOne", "zoneFrame", "cueSweep", "colorOriginal", "colorWhite"]) {
+    for (const name of ["blackout", "cueOne", "zoneFrame", "cueSweep", "fadeTest", "colorOriginal", "colorWhite"]) {
       (this.element[name] as HTMLButtonElement).disabled = disabled;
     }
   }
@@ -1136,6 +1152,11 @@ const TEMPLATE = /* html */ `
       <input data-laser="beatLooks" type="checkbox" checked />
       <span>Beat looks</span>
     </label>
+    <label class="toggle-row">
+      <input data-laser="dimmerFades" type="checkbox" checked />
+      <span>Dimmer fades</span>
+    </label>
+    <div class="hint">Fades may turn red or drop out if FB4 brightness is low.</div>
     <label class="field-row">
       <span>Output latency <strong data-laser="latencyValue">0</strong> ms</span>
       <input data-laser="latencyMs" type="number" min="0" max="500" step="5" value="0" />
@@ -1210,6 +1231,7 @@ const TEMPLATE = /* html */ `
       <button data-laser="zoneFrame" type="button">Square</button>
       <button data-laser="cueOne" type="button">Circle</button>
       <button data-laser="cueSweep" type="button">Cue sweep</button>
+      <button data-laser="fadeTest" type="button">Fade test</button>
       <button data-laser="colorOriginal" type="button">Original colour</button>
       <button data-laser="colorWhite" type="button">White</button>
     </div>

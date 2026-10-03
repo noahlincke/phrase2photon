@@ -152,6 +152,24 @@ test("keeps the output console collapsed to a handful of live controls", async (
   await expect(page.getByRole("button", { name: "Blackout" })).toBeVisible();
 });
 
+test("persists the dimmer fades toggle across reloads", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+
+  const panel = page
+    .locator("#laserRoot details")
+    .filter({ has: page.locator('[data-laser="dimmerFades"]') });
+  await panel.locator("summary").click();
+  const fades = page.locator('[data-laser="dimmerFades"]');
+  await expect(fades).toBeChecked();
+
+  await fades.uncheck();
+  await page.reload();
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+  await panel.locator("summary").click();
+  await expect(fades).not.toBeChecked();
+});
+
 test("switches between source modes without breaking the render loop", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

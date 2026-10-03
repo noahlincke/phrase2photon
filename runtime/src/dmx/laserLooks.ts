@@ -26,6 +26,10 @@ export interface LaserLookContext {
   beatsPerBar: number;
   /** Beats since the live analyzer called a drop, or null outside live input. */
   dropHitBeats: number | null;
+  /** Phrase occurrence ordinal; accents alternate size/brightness phrase to phrase. */
+  phraseOrdinal?: number;
+  /** Whether the operator allows dimmer fades as variety accents. */
+  dimmerFades: boolean;
 }
 
 /**
@@ -55,10 +59,11 @@ export function phraseKindFor(phrase: Phrase): PhraseKind {
 export function applyLaserLook(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
   let next = frame;
   const hit = dropHitBeats(ctx);
-  const ramp = hit === null && !preDropDip(ctx) ? rampWindow(ctx) : null;
+  const dipping = hit === null && preDropDip(ctx);
+  const ramp = dipping ? null : rampWindow(ctx);
   if (hit !== null) {
     next = applyDropHit(next, hit);
-  } else if (preDropDip(ctx)) {
+  } else if (dipping) {
     next = withDimmer(next, 0);
   } else {
     if (ramp) {
@@ -69,7 +74,7 @@ export function applyLaserLook(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4
     }
   }
   if (ctx.phraseKind === "breakdown") {
-    next = applyBreakdownDrift(next, ctx, ramp === null);
+    next = applyBreakdownDrift(next, ctx, ramp === null && hit === null, !dipping && hit === null && ramp === null);
   }
   return next;
 }
@@ -151,6 +156,14 @@ function rampWindow(ctx: LaserLookContext): RampWindow | null {
 function applyBuildRamp(frame: Fb4Dmx16Frame, ctx: LaserLookContext, ramp: RampWindow): Fb4Dmx16Frame {
   const progress = clamp01(ramp.beatsIntoRamp / Math.max(ramp.beatsInRamp, 1));
   const sized = withSize(frame, Math.round(BUILD_SIZE_FLOOR + (255 - BUILD_SIZE_FLOOR) * progress));
+  if (ctx.dimmerFades && finalBuildBars(ctx, ramp)) {
+    // The last two bars fade in from the floor instead of chopping: the swell
+    // hands the drop to the pre-drop dip and its dark beat.
+    const finalBars = ctx.beatsPerBar * 2;
+    const into = ramp.beatsIntoRamp - (ramp.beatsInRamp - finalBars);
+    const swell = clamp01(into / finalBars);
+    return whiteColour(withDimmer(sized, Math.round(FADE_FLOOR + (255 - FADE_FLOOR) * swell)));
+  }
   const intervalBeats = buildChopIntervalBeats(ctx, ramp);
   const chopPhase = (ramp.beatsIntoRamp % intervalBeats) / intervalBeats;
   const chopped = withDimmer(sized, chopPhase < 0.5 ? 255 : 0);
@@ -177,11 +190,18 @@ function whiteColour(frame: Fb4Dmx16Frame): Fb4Dmx16Frame {
   return buildFb4ColorModeFrame(frame, "white");
 }
 
-/** Downbeat accents: instant to full size, decaying back to the phrase size over one beat. */
+/**
+ * Downbeat accents alternate phrase to phrase while fades are allowed: even
+ * phrases pulse size, odd phrases pulse the dimmer from full down to the fade
+ * floor. Without fades every phrase pulses size.
+ */
 function applyDownbeatAccent(frame: Fb4Dmx16Frame, ctx: LaserLookContext): Fb4Dmx16Frame {
   // Drop phrases accent every beat; groove phrases only on the bar downbeat.
   if (ctx.phraseKind !== "drop" && ctx.beatInBar !== 1) {
     return frame;
+  }
+  if (ctx.dimmerFades && (ctx.phraseOrdinal ?? 0) % 2 === 1) {
+    return withDimmer(frame, Math.round(FADE_FLOOR + (255 - FADE_FLOOR) * (1 - ctx.beatPhase)));
   }
   const base = sizeOf(frame);
   return withSize(frame, Math.round(base + (255 - base) * (1 - ctx.beatPhase)));
@@ -192,10 +212,17 @@ function sizeOf(frame: Fb4Dmx16Frame): number {
 }
 
 /**
- * Breakdowns rotate at half speed and sit smaller; the dimmer stays full.
- * The shrink yields to a pre-drop ramp, which needs the growing sizes.
+ * Breakdowns rotate at half speed and sit smaller. The shrink yields to a
+ * pre-drop ramp, which needs the growing sizes, and to a drop hit, which owns
+ * the size for its bar. With fades allowed the dimmer breathes slowly between
+ * the fade floor and full; otherwise it stays at the phrase's full level.
  */
-function applyBreakdownDrift(frame: Fb4Dmx16Frame, ctx: LaserLookContext, allowShrink: boolean): Fb4Dmx16Frame {
+function applyBreakdownDrift(
+  frame: Fb4Dmx16Frame,
+  ctx: LaserLookContext,
+  allowShrink: boolean,
+  allowSwell: boolean
+): Fb4Dmx16Frame {
   const progress = clamp01(ctx.beatsIntoPhrase / Math.max(ctx.beatsInPhrase, 1));
   const angle = Math.round(progress * 0.5 * 255);
   const scale = allowShrink ? BREAKDOWN_SIZE_SCALE : 1;
@@ -209,11 +236,22 @@ function applyBreakdownDrift(frame: Fb4Dmx16Frame, ctx: LaserLookContext, allowS
     channels[6] = clampByte(Math.round((channels[6] ?? 0) * scale));
     channels[7] = clampByte(Math.round((channels[7] ?? 0) * scale));
   }
-  return { ...frame, channels };
+  const shrunk: Fb4Dmx16Frame = { ...frame, channels };
+  if (allowSwell && ctx.dimmerFades) {
+    const breath = 0.5 + 0.5 * Math.sin(progress * Math.PI * 2 * SWELL_CYCLES_PER_PHRASE);
+    return withDimmer(shrunk, Math.round(FADE_FLOOR + (255 - FADE_FLOOR) * breath));
+  }
+  return shrunk;
 }
 
 /** Breakdowns sit at three quarters of their phrase size. */
 const BREAKDOWN_SIZE_SCALE = 0.75;
+
+/** A breakdown breathes twice across its length. */
+const SWELL_CYCLES_PER_PHRASE = 2;
+
+/** Fades stop at forty percent of full; dimmer values below are reserved for off. */
+const FADE_FLOOR = Math.round(0.4 * 255);
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));

@@ -514,7 +514,8 @@ describe("FB4 DMX16 mapping", () => {
         beatPhase: 0,
         beatInBar: 1,
         beatsPerBar: 4,
-        dropHitBeats: 0
+        dropHitBeats: 0,
+        dimmerFades: false
       }
     );
 

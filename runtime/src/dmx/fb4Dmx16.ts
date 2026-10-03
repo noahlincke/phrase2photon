@@ -257,6 +257,33 @@ export function buildFb4ZoneFrame(bpm = 122): Fb4Dmx16Frame {
   });
 }
 
+/**
+ * A fixed-dimmer overlay for the console's Fade test sweep: at the venue the
+ * operator runs it to see how fades read at the FB4 brightness they set.
+ */
+export function buildFb4FadeOverlayFrame(dimmer: number, bpm = 122): Fb4Dmx16Frame {
+  return withFrameMeta({
+    profile: "pangolin-fb4-dmx39",
+    palette: `fade-${dimmer}`,
+    colorMode: "original",
+    label: `Fade ${dimmer}`,
+    channels: baseCueChannels39({
+      bpm,
+      pageNumber: 1,
+      cueNumber: 1,
+      dimmer,
+      zoom: 128,
+      sizeX: 160,
+      sizeY: 160,
+      angle: 128,
+      positionX: 128,
+      positionY: 128,
+      scan: 240,
+      color: { mode: "original", label: "Original color", value: 0, graphicsColor: "#f8fafc" }
+    })
+  });
+}
+
 export function cueIndexValue(cueNumber: number): number {
   if (cueNumber <= 0) {
     return 0;

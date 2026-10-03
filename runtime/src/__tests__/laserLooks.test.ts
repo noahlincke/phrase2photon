@@ -80,6 +80,8 @@ function context(overrides: Partial<LaserLookContext>): LaserLookContext {
     beatInBar: 1,
     beatsPerBar: 4,
     dropHitBeats: null,
+    phraseOrdinal: 0,
+    dimmerFades: false,
     ...overrides
   };
 }
@@ -418,5 +420,91 @@ describe("dimmer is always full or off", () => {
     };
     const silent = buildFb4Dmx16Frame({ show, phrase: silentPhrase, lightingCue: null, phraseProgress: 0 });
     expect(silent.channels[4]).toBe(0);
+  });
+});
+
+describe("dimmer fades allowed", () => {
+  const dimmerIndex = (frame: Fb4Dmx16Frame): number =>
+    frame.profile === "pangolin-fb4-dmx39" ? 16 : 4;
+
+  it("breathes the breakdown dimmer between the fade floor and full", () => {
+    let lowest = 255;
+    let highest = 0;
+    for (let beatsIntoPhrase = 0; beatsIntoPhrase <= 64; beatsIntoPhrase += 0.125) {
+      for (const nextKind of [null, "groove", "build"] as (PhraseKind | null)[]) {
+        const frame = looked("breakdown", {
+          nextPhraseKind: nextKind,
+          beatsInPhrase: 64,
+          beatsIntoPhrase,
+          beatPhase: beatsIntoPhrase % 1,
+          beatInBar: 1,
+          dimmerFades: true
+        });
+        const value = frame.channels[4];
+        if (value < lowest) lowest = value;
+        if (value > highest) highest = value;
+      }
+    }
+    // About 40% to 100%: the swell never dips to dark and never exceeds full.
+    expect(lowest).toBeGreaterThanOrEqual(102);
+    expect(lowest).toBeLessThanOrEqual(110);
+    expect(highest).toBe(255);
+  });
+
+  it("fades the build in through its last two bars instead of chopping", () => {
+    const start = looked("build", { beatsIntoPhrase: 24, beatPhase: 0, beatInBar: 1, dimmerFades: true });
+    expect(start.channels[4]).toBe(102);
+    const mid = looked("build", { beatsIntoPhrase: 28, beatPhase: 0, beatInBar: 1, dimmerFades: true });
+    expect(mid.channels[4]).toBe(Math.round(102 + 153 * 0.5));
+    const late = looked("build", { beatsIntoPhrase: 31.5, beatPhase: 0.5, beatInBar: 4, dimmerFades: true });
+    expect(late.channels[4]).toBe(Math.round(102 + 153 * 0.9375));
+    // The pre-drop dip still owns the final beat.
+    expect(looked("build", { nextPhraseKind: "drop", beatsIntoPhrase: 31.875, beatPhase: 0.875, beatInBar: 4, dimmerFades: true }).channels[4]).toBe(0);
+  });
+
+  it("alternates accents per phrase between size pulses and brightness pulses", () => {
+    const even = looked("groove", { beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1, dimmerFades: true });
+    expect(even.channels[4]).toBe(255);
+    expect(even.channels[6]).toBe(255);
+
+    const oddPeak = looked("groove", { phraseOrdinal: 1, beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1, dimmerFades: true });
+    expect(oddPeak.channels[4]).toBe(255);
+    const oddDecayed = looked("groove", { phraseOrdinal: 1, beatsIntoPhrase: 0.9, beatPhase: 0.9, beatInBar: 1, dimmerFades: true });
+    expect(oddDecayed.channels[4]).toBe(Math.round(102 + 153 * 0.1));
+  });
+
+  it("keeps the drop hit's dark beat and hard chop with fades allowed", () => {
+    const solid = looked("drop", { beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1, dimmerFades: true });
+    expect(solid.channels[4]).toBe(255);
+    const off = looked("drop", { beatsIntoPhrase: 1.375, beatPhase: 0.375, beatInBar: 2, dimmerFades: true });
+    expect(off.channels[4]).toBe(0);
+  });
+
+  it("keeps every faded dimmer at 0 or at least the fade floor across the grid", () => {
+    for (const kind of KIND_ORDER) {
+      for (const nextKind of [null, "drop", "groove"] as (PhraseKind | null)[]) {
+        for (const dropHit of [null, 0.2, 1.25, 3.5]) {
+          for (let beatsIntoPhrase = 0; beatsIntoPhrase <= 64; beatsIntoPhrase += 0.125) {
+            const beatInBar = Math.floor(beatsIntoPhrase) % 2 === 0 ? 1 : 3;
+            const beatPhase = Math.round((beatsIntoPhrase % 1) * 4) / 4;
+            const frame = applyLaserLook(baseFrame(kind, 0.5), context({
+              phraseKind: kind,
+              nextPhraseKind: nextKind,
+              beatsIntoPhrase,
+              beatInBar,
+              beatPhase,
+              dropHitBeats: dropHit,
+              dimmerFades: true
+            }));
+            const value = frame.channels[4];
+            if (value !== 0 && value < 102) {
+              throw new Error(
+                `faded dimmer ${value} below the floor at kind=${kind} next=${nextKind} hit=${dropHit} beat=${beatsIntoPhrase}`
+              );
+            }
+          }
+        }
+      }
+    }
   });
 });

@@ -1005,7 +1005,9 @@ function publishLiveLaserFrame(state: LiveMusicalState, phraseKey: string): void
       beatPhase: relativeBeats - Math.floor(relativeBeats),
       beatInBar: (Math.floor(relativeBeats) % 4 + 4) % 4 + 1,
       beatsPerBar: 4,
-      dropHitBeats: state.phrase.kind === "drop" ? beatsIntoPhrase : null
+      dropHitBeats: state.phrase.kind === "drop" ? beatsIntoPhrase : null,
+      phraseOrdinal: Math.max(0, Math.floor(state.phrase.startBar)),
+      dimmerFades: laser.dimmerFadesEnabled
     }
   );
   laser.publishShowFrame(phraseKey, frame, performance.now());
@@ -1053,7 +1055,9 @@ function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
       beatPhase: beatFloat - Math.floor(beatFloat),
       beatInBar: (Math.floor(beatFloat) % grid.beatsPerBar + grid.beatsPerBar) % grid.beatsPerBar + 1,
       beatsPerBar: grid.beatsPerBar,
-      dropHitBeats: null
+      dropHitBeats: null,
+      phraseOrdinal: schedule.indexOf(playback.active),
+      dimmerFades: laser.dimmerFadesEnabled
     }
   );
   return { phraseId: playback.active.phrase.phrase_id, frame };
