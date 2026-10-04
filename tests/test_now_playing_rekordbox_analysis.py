@@ -264,6 +264,21 @@ def test_snap_sections_to_bar_grid_keeps_the_map_tiling() -> None:
     assert sections[0]["end_seconds"] == 9.3  # the input is not mutated
 
 
+def test_snap_sections_to_bar_grid_starts_the_first_phrase_at_the_first_bar() -> None:
+    # The runtime analyser often starts its first section after a quiet lead-in;
+    # that boundary must extend back to the first bar, not snap forward to the
+    # second one and leave the show starting a bar late.
+    analysis = _analysis(Path("/unused.DAT"), with_phrases=False)
+    sections = [
+        {"label": "intro", "energy": "low", "start_seconds": 1.6, "end_seconds": 9.3},
+        {"label": "groove", "energy": "mid", "start_seconds": 9.3, "end_seconds": 33.0},
+    ]
+
+    snapped = snap_sections_to_bar_grid(sections, analysis)
+
+    assert [section["start_seconds"] for section in snapped] == [0.5, 8.5]
+
+
 def test_snap_sections_to_bar_grid_drops_sections_collapsed_onto_one_bar() -> None:
     analysis = _analysis(Path("/unused.DAT"), with_phrases=False)
     sections = [

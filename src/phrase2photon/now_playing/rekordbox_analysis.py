@@ -60,6 +60,10 @@ def snap_sections_to_bar_grid(sections, analysis: RekordboxAnalysis) -> list[dic
         min(analysis.bar_times, key=lambda bar_time: abs(bar_time - boundary))
         for boundary in boundaries
     ]
+    # The first phrase owns everything from the first downbeat: a lead-in the
+    # analyser left out of its first section sits between bar 1 and bar 2, and
+    # snapping it to the nearest bar would start the show one bar late.
+    snapped_boundaries[0] = analysis.bar_times[0]
     for index in range(1, len(snapped_boundaries)):
         snapped_boundaries[index] = max(snapped_boundaries[index], snapped_boundaries[index - 1])
     return [

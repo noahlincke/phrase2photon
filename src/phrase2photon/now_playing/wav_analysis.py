@@ -53,6 +53,13 @@ def build_wav_analysis_extraction(
     subdivide: bool = True,
 ) -> LiveSetExtraction:
     section_rows = sections or analyze_audio_sections(audio_path, duration_seconds=duration_seconds, tempo=tempo)
+    # The first phrase owns everything from the first downbeat: bar|beat cannot
+    # express the lead-in before it, and shows have to start playing on the
+    # downbeat whatever the section source says.
+    if section_rows:
+        section_rows[0]["start_seconds"] = min(
+            float(section_rows[0]["start_seconds"]), downbeat_seconds
+        )
     # Rekordbox-backed shows carry their own tempo map and bar-accurate
     # boundaries, so their phrase map is used as-is instead of re-chunked.
     if subdivide and tempo_map is None and _should_subdivide_structural_map(

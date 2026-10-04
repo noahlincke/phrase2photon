@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from phrase2photon.contracts.show_package import TempoMapSegment
 from phrase2photon.now_playing.wav_analysis import (
     _detect_structural_sections_from_bar_energy,
     build_wav_analysis_extraction,
@@ -27,6 +28,27 @@ def test_build_wav_analysis_extraction_produces_phrase_ranges_and_energy_from_se
     assert extraction.phrases[1].semantics.visual_intent.palette == "acid-contrast"
 
 
+def test_build_wav_analysis_extraction_covers_from_the_first_downbeat() -> None:
+    # Whatever the section source says, the show has to start at the first
+    # downbeat: bar|beat cannot express the lead-in before it, and the
+    # validator requires the first phrase to own it.
+    extraction = build_wav_analysis_extraction(
+        audio_path=Path("/tmp/late-first-section.wav"),
+        title="Late First Section",
+        artist=None,
+        duration_seconds=1200.0,
+        tempo=124.0,
+        sections=[
+            {"label": "intro", "start_seconds": 1.9, "end_seconds": 240.0, "energy": "low"},
+            {"label": "drop", "start_seconds": 240.0, "end_seconds": 480.0, "energy": "peak"},
+        ],
+        downbeat_seconds=0.5,
+        tempo_map=[TempoMapSegment(start_seconds=0.0, bpm=124.0, downbeat_seconds=0.5)],
+    )
+
+    assert extraction.phrases[0].start_bar_beat == "1|1"
+
+
 def test_build_wav_analysis_extraction_preserves_fractional_beat_positions() -> None:
     extraction = build_wav_analysis_extraction(
         audio_path=Path("/tmp/off-grid.wav"),
@@ -40,7 +62,9 @@ def test_build_wav_analysis_extraction_preserves_fractional_beat_positions() -> 
         ],
     )
 
-    assert extraction.phrases[0].start_bar_beat == "2|1.5"
+    # The first phrase extends back over the tease's lead-in to the downbeat;
+    # later boundaries keep their fractional beat positions.
+    assert extraction.phrases[0].start_bar_beat == "1|1"
     assert extraction.phrases[0].end_bar_beat == "3|2.5"
     assert extraction.phrases[1].start_bar_beat == "3|2.5"
     assert extraction.phrases[1].end_bar_beat == "4|3.5"
