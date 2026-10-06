@@ -421,6 +421,27 @@ def test_sticky_master_deck_still_wins() -> None:
     assert stream.clock_payload()["deck"] == 1
 
 
+def test_paused_on_air_deck_outranks_a_loaded_master_deck() -> None:
+    """With nothing playing, the last on-air deck keeps the slot and the clock.
+
+    Pausing the only playing deck can leave the master byte on the other deck,
+    which is loaded but paused; that deck must not steal the on-air identity or
+    the transport clock.
+    """
+    stream, clock, _popen, _runner = _stream([])
+    stream._apply_line("track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT\n")
+    stream._apply_line("track deck=2\ttitle=Track B\tartist=B\tanlz=/b/ANLZ0000.DAT\n")
+    for step in range(10):  # deck 1 plays while the master byte already reads deck 2
+        _play_tick(stream, clock, master=1, d1=f"{step * 2205},128.000", d2="0,128.000")
+    for step in range(10, 24):  # deck 1 pauses well past the stop window
+        _play_tick(stream, clock, master=1, d1=f"{9 * 2205},128.000", d2="0,128.000")
+    payload = stream.clock_payload()
+    assert payload["deck"] == 1
+    assert payload["title"] == "Track A"
+    assert payload["positionSeconds"] == pytest.approx(9 * 2205 / 44100)
+    assert payload["playing"] is False
+
+
 def test_select_playing_deck_switches_to_longest_playing() -> None:
     stopped = rekordbox_stream.DeckMotion(
         last_motion_at=1.0, playing_since=0.5, last_position=100, last_seen_at=1.0

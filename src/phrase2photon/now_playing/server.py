@@ -233,7 +233,11 @@ class NowPlayingService:
             ):
                 return copy.deepcopy(self._status)
 
-            observation = _prefer_on_air_deck(self.poll_source(), self.memory_stream)
+            observation = _prefer_on_air_deck(
+                self.poll_source(),
+                self.memory_stream,
+                previous=None if self._resolved is None else self._resolved.observation,
+            )
             self._last_refresh_monotonic = now_monotonic
 
             if observation is None:
@@ -587,6 +591,7 @@ def poll_now_playing_source() -> TrackObservation | None:
 def _prefer_on_air_deck(
     observation: TrackObservation | None,
     memory_stream: RekordboxMemoryStream,
+    previous: TrackObservation | None = None,
 ) -> TrackObservation | None:
     """Replaces the polled observation with the on-air deck's own track.
 
@@ -609,6 +614,15 @@ def _prefer_on_air_deck(
         on_air.state, is_playing=on_air.is_playing
     )
     if deck_observation is None:
+        # The on-air deck is known but its track could not be resolved to an
+        # observation. Holding the deck's own last observation keeps identity
+        # and clock together; the log observation describes the last loaded
+        # track, which is often the other deck's, so it must not override a
+        # deck the playing-deck rule is holding.
+        if previous is not None and previous.deck == on_air.deck:
+            if on_air.is_playing is False:
+                return previous.model_copy(update={"is_playing": False})
+            return previous
         return observation
     if observation is None:
         return deck_observation if on_air.is_playing else None

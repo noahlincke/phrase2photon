@@ -316,6 +316,36 @@ def test_paused_deck_leaves_a_fresher_other_source_alone(tmp_path: Path, monkeyp
     assert payload["observation"]["deck"] is None
 
 
+def test_paused_on_air_deck_keeps_its_show_when_the_deck_track_cannot_be_resolved(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A paused on-air deck must not lose its identity to the agent log.
+
+    When the collection lookup stops resolving the on-air deck's own track, the
+    log observation describes the last loaded track — the other deck's — and
+    adopting it would swap the show under a playhead that still belongs to the
+    paused deck.
+    """
+    clock, stream, service, coyhaique_audio, rags_audio = _playing_rehearsal(tmp_path, monkeypatch)
+    by_title = {COYHAIQUE: coyhaique_audio, RAGS: rags_audio}
+    _patch_deck_database(monkeypatch, by_title)
+    position = 0
+    for _ in range(4):
+        position += 2205
+        _feed_tick(stream, clock, d1=f"{position},124.000", d2="7761,125.000")
+    payload = _await_status(service, lambda item: item["modeState"] == "premade_active")
+    assert payload["observation"]["title"] == COYHAIQUE
+
+    for _ in range(10):  # deck 1 pauses; the stream stays exact
+        _feed_tick(stream, clock, d1=f"{position},124.000", d2="7761,125.000")
+    by_title.clear()  # the collection lookup stops resolving the deck's track
+
+    payload = service.status_payload()
+    assert payload["observation"]["title"] == COYHAIQUE
+    assert payload["observation"]["deck"] == 1
+    assert payload["activeShowId"] is not None
+
+
 def test_on_air_deck_state_reports_deck_track_and_playing_flag() -> None:
     clock = FakeClock()
     stream = _stream(clock)

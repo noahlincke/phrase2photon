@@ -599,12 +599,25 @@ class RekordboxMemoryStream:
     def _active_deck_locked(
         self, observation_title: str | None, observation_artist: str | None
     ) -> int | None:
+        now = self._clock()
+        deck = _select_playing_deck(now, self._playing_deck, self._deck_motion)
+        # The master byte is only trusted while a deck is actually playing: once
+        # the playing deck pauses, Rekordbox can leave the master on the other
+        # loaded deck, and that paused deck must not steal the on-air slot from
+        # the deck the playing-deck rule is holding.
+        playing = any(
+            motion is not None
+            and motion.last_motion_at is not None
+            and now - motion.last_motion_at <= PLAYING_MOTION_SECONDS
+            for motion in self._deck_motion
+        )
+        if not playing and deck is not None:
+            return deck
         master = self._master_deck
         if master is not None:
             track = self._tracks[master]
             if track is not None and track.title:
                 return master + 1
-        deck = _select_playing_deck(self._clock(), self._playing_deck, self._deck_motion)
         if deck is not None:
             return deck
         if not observation_title:
