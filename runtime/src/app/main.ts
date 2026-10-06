@@ -51,6 +51,7 @@ import {
 } from "../nowPlaying/handoff.js";
 import {
   deckCueBpm,
+  deckDisplayBpm,
   deckPitchRatio,
   heldClockStatus,
   heldFromStatus,
@@ -823,7 +824,7 @@ function showMusicalFrame(): MusicalContext | null {
       bands,
       paletteId: paletteOverrideId ?? phrase.visual_look.palette
     },
-    bpm: tempoAt(grid, seconds),
+    bpm: deckDisplayBpm(loadedSourceKind, nowPlayingClockBpm, tempoAt(grid, seconds)),
     bar: playback.bar,
     // `playback.beat` counts beats from the start of the track; the HUD wants
     // the position inside the bar.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deckCueBpm,
+  deckDisplayBpm,
   deckPitchRatio,
   heldClockStatus,
   heldFromStatus,
@@ -274,6 +275,19 @@ describe("deck bpm consumers", () => {
     expect(deckCueBpm("now-playing", 0, 120)).toBe(120);
     expect(deckCueBpm("library", 123, 120)).toBe(120);
     expect(deckCueBpm(null, 123, 120)).toBe(120);
+  });
+
+  it("reads a synced deck's effective tempo in the now-playing HUD", () => {
+    // Rags: native 125, deck synced down to 124.
+    expect(deckDisplayBpm("now-playing", 124, 125).toFixed(1)).toBe("124.0");
+    // A deck grid an octave off still reads on the show's octave.
+    expect(deckDisplayBpm("now-playing", 248, 124).toFixed(1)).toBe("124.0");
+  });
+
+  it("keeps the show tempo in the HUD without a deck bpm", () => {
+    expect(deckDisplayBpm("now-playing", null, 125).toFixed(1)).toBe("125.0");
+    expect(deckDisplayBpm("library", 124, 125).toFixed(1)).toBe("125.0");
+    expect(deckDisplayBpm(null, 124, 125).toFixed(1)).toBe("125.0");
   });
 });
 

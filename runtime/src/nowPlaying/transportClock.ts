@@ -129,6 +129,24 @@ export function deckCueBpm(
   return Math.round(showBpm * deckPitchRatio(deckBpm, showBpm));
 }
 
+/**
+ * The bpm a now-playing HUD reads at the playhead.
+ *
+ * The tempo map assumes the show's original tempo, but a pitched deck plays
+ * through it faster or slower, so the readout follows the deck's effective
+ * tempo on the show's octave; without a deck sample it stays at the show bpm.
+ */
+export function deckDisplayBpm(
+  sourceKind: LoadedSourceKind | null,
+  deckBpm: number | null,
+  showBpm: number
+): number {
+  if (sourceKind !== "now-playing") {
+    return showBpm;
+  }
+  return showBpm * deckPitchRatio(deckBpm, showBpm);
+}
+
 export function resolveNowPlayingPlaybackDurationSeconds(
   status: NowPlayingStatus | null
 ): number | null {
