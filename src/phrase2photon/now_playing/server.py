@@ -427,7 +427,9 @@ class NowPlayingService:
         self,
         observation: TrackObservation,
     ) -> tuple[ResolvedNowPlayingTrack | None, list[ProviderAttempt]]:
-        disk_candidates = self.disk_candidates_fn(observation)
+        disk_candidates = _with_source_hint_candidate(
+            observation, self.disk_candidates_fn(observation)
+        )
         resolved, disk_attempt = self._resolve_candidates(
             observation=observation,
             provider_name="disk",
@@ -638,6 +640,31 @@ def _matches_exact_disk_source_hint(observation: TrackObservation, candidate: Pr
         and candidate.local_path is not None
         and observation.source_hint_path == candidate.local_path
     )
+
+
+def _with_source_hint_candidate(
+    observation: TrackObservation,
+    disk_candidates: list[ProviderCandidate],
+) -> list[ProviderCandidate]:
+    """Puts the file the source app itself loaded ahead of the disk scan.
+
+    The deck observation names the exact audio file Rekordbox is playing, which
+    often sits outside the scanned candidate roots (demo libraries, USB sticks
+    already ejected); without this the on-demand preparation waits on a
+    provider match for a track whose audio is already on disk.
+    """
+    hint = observation.source_hint_path
+    if hint is None or hint.suffix.casefold() not in LOCAL_AUDIO_SUFFIXES or not hint.is_file():
+        return disk_candidates
+    exact = ProviderCandidate(
+        provider="disk",
+        title=observation.title,
+        artist=observation.artist,
+        reported_duration_seconds=None,
+        local_path=hint,
+        metadata_confidence=1.0,
+    )
+    return [exact, *(candidate for candidate in disk_candidates if candidate.local_path != hint)]
 
 
 # Used only when the runtime analyser is unavailable. Any fixed tempo is

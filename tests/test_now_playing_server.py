@@ -294,6 +294,52 @@ def test_now_playing_service_promotes_to_premade_active_for_ready_disk_audio(tmp
     assert payload["providerAttempts"] == [{"provider": "disk", "status": "hit", "message": "resolved from Example Set"}]
 
 
+def test_now_playing_service_resolves_the_source_hint_file_itself(tmp_path: Path) -> None:
+    """An unprepared on-air track starts preparing from the file the deck loaded.
+
+    Demo-library tracks sit outside the scanned candidate roots, so the disk
+    scan finds nothing; the observation still carries the exact path Rekordbox
+    is playing, and preparation must use it instead of stalling until a
+    provider happens to match.
+    """
+    audio_path = tmp_path / "music" / "PioneerDJ" / "Demo Tracks" / "Demo Track 1.mp3"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"mp3")
+    show_dir = tmp_path / "compiled-show"
+    show_dir.mkdir(parents=True, exist_ok=True)
+    (show_dir / "show.json").write_text(json.dumps({"song": {"title": "Demo Track 1"}}), encoding="utf-8")
+    observation = TrackObservation(
+        source_app="Rekordbox",
+        title="Demo Track 1",
+        artist="Loopmasters",
+        duration_seconds=214.0,
+        observed_at=datetime.now(UTC),
+        source_hint_path=audio_path,
+        is_playing=True,
+        deck=1,
+    )
+
+    service = NowPlayingService(
+        cache_root=tmp_path / "cache",
+        min_refresh_interval_seconds=0.0,
+        poll_source=lambda: observation,
+        disk_candidates_fn=lambda _observation: [],
+        provider_fns=[],
+        prepare_audio=lambda candidate: candidate.local_path or audio_path,
+        audio_sha256=lambda _path: "f" * 64,
+        measure_duration=lambda _path: 214.0,
+        ensure_show=lambda resolved: show_dir,
+    )
+
+    payload = _await_status(service, lambda item: item["modeState"] == "premade_active")
+
+    assert payload["modeState"] == "premade_active"
+    assert payload["preparedAudio"]["path"] == str(audio_path)
+    assert payload["providerAttempts"] == [
+        {"provider": "disk", "status": "hit", "message": "resolved from Demo Track 1"}
+    ]
+
+
 def test_now_playing_service_accepts_exact_hinted_disk_file_despite_duration_mismatch(tmp_path: Path) -> None:
     source_audio_path = tmp_path / "Franky Rizardo - Baile De Fantome.mp3"
     source_audio_path.write_bytes(b"mp3")
@@ -343,7 +389,7 @@ def test_now_playing_service_accepts_exact_hinted_disk_file_despite_duration_mis
         "provider": "disk",
     }
     assert payload["providerAttempts"] == [
-        {"provider": "disk", "status": "hit", "message": "resolved from Franky Rizardo - Baile De Fantome"}
+        {"provider": "disk", "status": "hit", "message": "resolved from Baile De Fantome"}
     ]
 
 
