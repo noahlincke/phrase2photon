@@ -121,6 +121,7 @@ export const SHELL_TEMPLATE = /* html */ `
             <div class="meter-row">
               <span>Deck</span>
               <strong id="nowPlayingModeState">offline</strong>
+              <span id="nowPlayingPrepareState" class="hint prepare-state"></span>
             </div>
             <div id="nowPlayingStatus" class="hint">Waiting for the Now Playing service.</div>
             <div id="nowPlayingProgress" class="prepare-progress" hidden>

@@ -16,7 +16,7 @@ import {
 import { SHELL_TEMPLATE } from "./shell.js";
 import { createShowChannel, type ShowMessage } from "./showLink.js";
 import type { LoadedTrack, RuntimeInputMode } from "./types.js";
-import { buildNowPlayingMetaRows } from "./viewState.js";
+import { buildNowPlayingMetaRows, nowPlayingPrepareState, nowPlayingTransportLabel, preparationProgressValue } from "./viewState.js";
 import { LiveAnalyzer, type LiveMusicalState } from "../audio/liveAnalysis.js";
 import { paletteById, palettes } from "../graphics/palette.js";
 import { VisualSystem, type MusicalFrame } from "../graphics/visualSystem.js";
@@ -150,6 +150,7 @@ const ui = {
   showCachedNowPlayingTracks: required<HTMLInputElement>("showCachedNowPlayingTracks"),
 
   nowPlayingModeState: required<HTMLElement>("nowPlayingModeState"),
+  nowPlayingPrepareState: required<HTMLElement>("nowPlayingPrepareState"),
   nowPlayingStatus: required<HTMLDivElement>("nowPlayingStatus"),
   nowPlayingProgress: required<HTMLDivElement>("nowPlayingProgress"),
   nowPlayingProgressFill: required<HTMLDivElement>("nowPlayingProgressFill"),
@@ -686,6 +687,14 @@ function updateTransportChrome(): void {
     ui.playButton.textContent = "Synced";
     ui.playButton.disabled = true;
     ui.scrub.disabled = true;
+    // The premade driver names the show it is running; the live fallback names
+    // the deck's own track, since the loaded show is not what is playing.
+    ui.nowLabel.textContent = nowPlayingTransportLabel({
+      driver: nowPlayingDriver,
+      observationTitle: nowPlayingStatus?.observation?.title ?? null,
+      loadedTitle: loaded?.libraryTrack.title ?? null
+    });
+    ui.nowTime.textContent = nowPlayingDriver === "live-mic" ? "live" : "";
     return;
   }
   ui.playButton.textContent = ui.audio.paused ? "Play" : "Pause";
@@ -1753,6 +1762,27 @@ function invalidateNowPlayingPreparedTrack(): void {
   nowPlayingPreloadAudio.load();
 }
 
+/**
+ * Drops the loaded Now Playing show.
+ *
+ * The live fallback has taken the room while the deck's current track has no
+ * show yet; keeping the outgoing show loaded would keep naming it and
+ * rendering its timeline under somebody else's playhead.
+ */
+function unloadNowPlayingShow(): void {
+  loaded = null;
+  loadedSourceKind = null;
+  schedule = [];
+  lastPhraseId = null;
+  libraryWaveformPeaks = [];
+  nowPlayingClockAnchor = null;
+  nowPlayingClockBpm = null;
+  nowPlayingHeld = null;
+  deckFollowerTrackKey = null;
+  timeline.clear();
+  updateTransportChrome();
+}
+
 function activeLoadedNowPlayingShowId(): string | null {
   if (
     inputMode !== "now-playing" ||
@@ -1769,6 +1799,12 @@ function activeLoadedNowPlayingShowId(): string | null {
 async function syncNowPlayingRuntime(): Promise<void> {
   if (inputMode !== "now-playing") {
     return;
+  }
+  // Once the live fallback owns the room the loaded show is not driving
+  // anything: unloading it keeps the transport bar and timeline from
+  // describing the previous track while the deck's show prepares.
+  if (nowPlayingDriver === "live-mic" && loadedSourceKind === "now-playing") {
+    unloadNowPlayingShow();
   }
   const readyTrack = readyNowPlayingTrack();
   const readyFreshnessKey = readyNowPlayingFreshnessKey();
@@ -1952,6 +1988,12 @@ function renderNowPlayingSurface(): void {
   ui.nowPlayingProgress.hidden = progress === null;
   ui.nowPlayingProgressFill.style.width = progress === null ? "0%" : `${Math.round(progress * 100)}%`;
   ui.nowPlayingModeState.textContent = nowPlayingSurfaceLabel();
+  ui.nowPlayingPrepareState.textContent =
+    nowPlayingPrepareState({
+      preparing: nowPlayingStatus?.preparing ?? null,
+      observationTitle: nowPlayingStatus?.observation?.title ?? null,
+      outputMode: nowPlayingSession.outputMode
+    }) ?? "";
 
   if (nowPlayingFetchError) {
     ui.nowPlayingStatus.textContent = `Service offline: ${nowPlayingFetchError}`;
@@ -2003,21 +2045,6 @@ function nowPlayingSurfaceLabel(): string {
     return "preparing";
   }
   return nowPlayingStatus?.observation ? "listening" : "idle";
-}
-
-function preparationProgressValue(stage: string | null): number | null {
-  switch (stage) {
-    case "resolving_audio":
-      return 0.2;
-    case "caching_audio":
-      return 0.45;
-    case "analyzing_audio":
-      return 0.7;
-    case "compiling_show":
-      return 0.9;
-    default:
-      return null;
-  }
 }
 
 // ----------------------------------------------------------------- debug

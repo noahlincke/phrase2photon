@@ -3,6 +3,9 @@ import type { NowPlayingStatus } from "../nowPlaying/types.js";
 
 export type VisualOwnership = "mic" | "loaded" | "idle";
 
+/** Which signal owns the room in Now Playing mode; mirrors liveDriver.ts. */
+export type NowPlayingDriverKind = "premade" | "live-mic";
+
 export interface BuildNowPlayingMetaRowsInput {
   status: NowPlayingStatus | null;
   outputMode: string;
@@ -67,4 +70,69 @@ export function buildNowPlayingMetaRows(input: BuildNowPlayingMetaRowsInput): st
   }
 
   return rows;
+}
+
+/**
+ * The track name the transport bar shows.
+ *
+ * While the premade driver runs the loaded show, the bar names that show.
+ * Once the live fallback owns the room — the deck moved to a track whose show
+ * is not ready yet — naming the unloaded show would lie about what is
+ * playing, so the bar names the deck's own track instead.
+ */
+export function nowPlayingTransportLabel(input: {
+  driver: NowPlayingDriverKind;
+  observationTitle: string | null;
+  loadedTitle: string | null;
+}): string {
+  if (input.driver === "live-mic") {
+    return input.observationTitle ?? "No source";
+  }
+  return input.loadedTitle ?? "No source";
+}
+
+/** How far through preparation a stage sits, or null for an unknown stage. */
+export function preparationProgressValue(stage: string | null): number | null {
+  switch (stage) {
+    case "resolving_audio":
+      return 0.2;
+    case "caching_audio":
+      return 0.45;
+    case "analyzing_audio":
+      return 0.7;
+    case "compiling_show":
+      return 0.9;
+    default:
+      return null;
+  }
+}
+
+const PREPARE_STAGE_LABELS: Record<string, string> = {
+  resolving_audio: "resolving",
+  caching_audio: "caching",
+  analyzing_audio: "analysing",
+  compiling_show: "compiling"
+};
+
+/**
+ * The one-line preparation state for the Now Playing panel, or null when
+ * there is nothing to say: a running preparation names its track and step,
+ * an active show reads Ready, anything else stays quiet.
+ */
+export function nowPlayingPrepareState(input: {
+  preparing: NowPlayingStatus["preparing"];
+  observationTitle: string | null;
+  outputMode: string;
+}): string | null {
+  if (input.preparing !== null) {
+    const title = input.observationTitle ?? "the current track";
+    const stage = PREPARE_STAGE_LABELS[input.preparing.stage] ?? input.preparing.stage;
+    const progress = preparationProgressValue(input.preparing.stage);
+    const percent = progress === null ? "" : `, ${Math.round(progress * 100)}%`;
+    return `Preparing ${title}: ${stage}${percent}`;
+  }
+  if (input.outputMode === "premade_active") {
+    return "Ready";
+  }
+  return null;
 }
