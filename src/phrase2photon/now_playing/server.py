@@ -136,7 +136,7 @@ class NowPlayingService:
         self.prepare_audio = prepare_audio or self._prepare_audio_candidate
         self.audio_sha256 = audio_sha256 or audio_sha256_file
         self.measure_duration = measure_duration
-        self.ensure_show = ensure_show or (lambda resolved: ensure_compiled_show(resolved, cache_root=self.cache_root))
+        self.ensure_show = ensure_show or self._ensure_show_with_progress
         self.min_refresh_interval_seconds = min_refresh_interval_seconds
         self.memory_stream = memory_stream if memory_stream is not None else RekordboxMemoryStream()
 
@@ -358,6 +358,18 @@ class NowPlayingService:
             )
             return copy.deepcopy(self._status)
 
+    def _ensure_show_with_progress(self, resolved: ResolvedNowPlayingTrack) -> Path:
+        return ensure_compiled_show(
+            resolved,
+            cache_root=self.cache_root,
+            report_stage=self._report_prepare_stage,
+        )
+
+    def _report_prepare_stage(self, stage: str) -> None:
+        with self._lock:
+            if self._preparing_payload is not None:
+                self._preparing_payload = {**self._preparing_payload, "stage": stage}
+
     def _clear_prepare_state_locked(self) -> None:
         self._preparing_key = None
         self._preparing_payload = None
@@ -370,8 +382,8 @@ class NowPlayingService:
         self._preparing_key = key
         self._preparing_payload = {
             "showId": "",
-            "stage": "matching_audio",
-            "message": "Matching cached or downloadable audio.",
+            "stage": "resolving_audio",
+            "message": "Resolving cached or downloadable audio.",
         }
         self._preparing_attempts = []
         self._preparing_result = None
@@ -394,14 +406,6 @@ class NowPlayingService:
                     self._preparing_result = (None, provider_attempts)
             return
 
-        with self._lock:
-            if self._preparing_key != key:
-                return
-            self._preparing_payload = {
-                "showId": resolved.audio_identity,
-                "stage": "compiling_show",
-                "message": "Caching audio and compiling show.",
-            }
         try:
             show_dir = self.ensure_show(resolved)
             resolved.show_dir = show_dir
@@ -689,11 +693,14 @@ def ensure_compiled_show(
     *,
     cache_root: Path | None = None,
     force: bool = False,
+    report_stage: Callable[[str], None] | None = None,
 ) -> Path:
     show_dir = show_dir_for_identity(resolved.audio_identity, cache_root=cache_root)
     cache_dir = show_dir.parent
     if force:
         shutil.rmtree(cache_dir, ignore_errors=True)
+    if report_stage is not None:
+        report_stage("caching_audio")
     cached_audio = _ensure_cached_audio(resolved, cache_root=cache_root)
     show_json = show_dir / "show.json"
     if show_json.exists() and _cached_analysis_current(show_dir):
@@ -704,6 +711,8 @@ def ensure_compiled_show(
     # Rekordbox's own grid wins when the file is in the collection: Noah fixes
     # those beat grids by hand, so the downbeat is exact. Everything below is
     # the analyser path the service used before this existed.
+    if report_stage is not None:
+        report_stage("analyzing_audio")
     rekordbox = load_rekordbox_analysis(resolved.asset.local_path)
     tempo_map = rekordbox.tempo_map if rekordbox else None
     used_fallback = False
@@ -742,6 +751,8 @@ def ensure_compiled_show(
         (cache_dir / FALLBACK_ANALYSIS_MARKER).write_text(f"tempo={FALLBACK_TEMPO}\n", encoding="utf-8")
     extraction_path = cache_dir / "wav-analysis.extraction.json"
     extraction_path.write_text(extraction.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if report_stage is not None:
+        report_stage("compiling_show")
     compile_show_package(cache_dir, show_dir, extraction_path)
     _write_analysis_source_sidecar(show_dir, rekordbox)
     resolved.show_dir = show_dir

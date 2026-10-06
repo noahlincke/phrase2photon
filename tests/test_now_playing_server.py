@@ -39,6 +39,11 @@ def _observation(*, observed_at: datetime | None = None) -> TrackObservation:
     )
 
 
+class _StubExtraction:
+    def model_dump_json(self, *, indent: int | None = None) -> str:
+        return "{}"
+
+
 def _await_status(
     service: NowPlayingService,
     predicate,
@@ -582,6 +587,41 @@ def test_ensure_compiled_show_uses_injected_cache_root(tmp_path: Path) -> None:
 
     assert compiled_dir == show_dir
     assert resolved.show_dir == show_dir
+
+
+def test_ensure_compiled_show_reports_the_steps_it_runs(tmp_path: Path, monkeypatch) -> None:
+    audio_path = tmp_path / "prepared.wav"
+    audio_path.write_bytes(b"RIFFexample")
+    resolved = ResolvedNowPlayingTrack(
+        observation=_observation(),
+        asset=PreparedAudioAsset(
+            local_path=audio_path,
+            measured_duration_seconds=1200.0,
+            audio_sha256="f" * 64,
+            provider="disk",
+        ),
+        audio_identity="example-show",
+    )
+    monkeypatch.setattr("phrase2photon.now_playing.server.analyze_track", lambda _path: None)
+    monkeypatch.setattr(
+        "phrase2photon.now_playing.server.analyze_audio_sections",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "phrase2photon.now_playing.server.build_wav_analysis_extraction",
+        lambda **_kwargs: _StubExtraction(),
+    )
+    monkeypatch.setattr(
+        "phrase2photon.now_playing.server.compile_show_package", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        "phrase2photon.now_playing.server._write_analysis_source_sidecar", lambda *_args: None
+    )
+
+    stages: list[str] = []
+    ensure_compiled_show(resolved, cache_root=tmp_path, report_stage=stages.append)
+
+    assert stages == ["caching_audio", "analyzing_audio", "compiling_show"]
 
 
 def test_route_request_status_promotes_from_fallback_to_ready_show(tmp_path: Path) -> None:
