@@ -35,6 +35,7 @@ from phrase2photon.now_playing.providers import (
 )
 from phrase2photon.now_playing.rekordbox_analysis import (
     RekordboxAnalysis,
+    load_deck_beat_grid,
     load_rekordbox_analysis,
     snap_sections_to_bar_grid,
 )
@@ -183,6 +184,38 @@ class NowPlayingService:
         ):
             payload["showId"] = None
         return payload
+
+    def grid_payload(self) -> dict[str, object]:
+        """The on-air deck's Rekordbox beat grid, keyed on the deck's identity.
+
+        The live-analysis fallback has no resolved show, so its identity rides
+        on the deck number and the ANLZ path itself: the runtime applies the
+        grid only when the exact clock sample describes the same deck track.
+        """
+        on_air = self.memory_stream.on_air_deck_state(
+            observation_title=None, observation_artist=None
+        )
+        if on_air is None:
+            return {
+                "status": self.memory_stream.status(),
+                "deck": None,
+                "title": None,
+                "artist": None,
+                "anlzPath": None,
+                "beatSeconds": [],
+                "downbeatIndexes": [],
+            }
+        anlz_path = on_air.state.anlz_path
+        grid = load_deck_beat_grid(anlz_path)
+        return {
+            "status": self.memory_stream.status(),
+            "deck": on_air.deck,
+            "title": on_air.state.title,
+            "artist": on_air.state.artist,
+            "anlzPath": anlz_path,
+            "beatSeconds": list(grid.beat_seconds) if grid else [],
+            "downbeatIndexes": list(grid.downbeat_indexes) if grid else [],
+        }
 
     def refresh(self, *, force: bool = False) -> dict[str, object]:
         with self._lock:
@@ -822,6 +855,7 @@ def route_request(
     cache_root: Path | None = None,
     status_provider: Callable[[], dict[str, object]] | None = None,
     clock_provider: Callable[[], dict[str, object]] | None = None,
+    grid_provider: Callable[[], dict[str, object]] | None = None,
 ) -> RouteResponse:
     normalized_path = urlparse(path).path
     root = cache_root or now_playing_cache_root()
@@ -832,6 +866,10 @@ def route_request(
 
     if normalized_path == "/api/now-playing/clock":
         provider = clock_provider or _default_now_playing_service().clock_payload
+        return _json_response(provider())
+
+    if normalized_path == "/api/now-playing/grid":
+        provider = grid_provider or _default_now_playing_service().grid_payload
         return _json_response(provider())
 
     if normalized_path == "/api/now-playing/debug/rekordbox":
@@ -885,6 +923,7 @@ def run_server(host: str, port: int) -> None:
                 method=method,
                 headers=self.headers,
                 status_provider=service.status_payload,
+                grid_provider=service.grid_payload,
             )
             self.send_response(response.status_code)
             self.send_header("Content-Type", response.content_type)

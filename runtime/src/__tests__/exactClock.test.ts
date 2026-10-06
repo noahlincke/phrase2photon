@@ -19,6 +19,7 @@ function sample(overrides: Partial<NowPlayingClockSample> = {}): NowPlayingClock
     bpm: 128,
     title: "Track",
     artist: null,
+    anlzPath: null,
     ageMs: 0,
     showId: null,
     ...overrides

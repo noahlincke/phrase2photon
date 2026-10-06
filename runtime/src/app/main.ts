@@ -67,6 +67,13 @@ import {
   type NowPlayingDriver,
   type NowPlayingTrackingState
 } from "../nowPlaying/liveDriver.js";
+import {
+  applyDeckGridPhase,
+  deckGridPhaseForClock,
+  validateDeckGridPayload,
+  type DeckGridPhase,
+  type NowPlayingDeckGrid
+} from "../nowPlaying/rekordboxGrid.js";
 import type { NowPlayingStatus } from "../nowPlaying/types.js";
 import { buildPhraseSchedule, playbackStateAt, type ScheduledPhrase } from "../runtime/schedule.js";
 import { coerceShowPackage } from "../show/hydrate.js";
@@ -232,6 +239,13 @@ let nowPlayingClockAnchor: ClockSampleAnchor | null = null;
 let nowPlayingClockBpm: number | null = null;
 let nowPlayingClockInFlight = false;
 let nowPlayingClockTimer: number | null = null;
+// The fallback's beat grid rides the deck track identity, not a show id: the
+// anchor is the freshest exact deck sample, and the grid is valid only while
+// it describes that same deck track.
+let nowPlayingGridClock: { anchor: ClockSampleAnchor; deck: number; anlzPath: string } | null = null;
+let nowPlayingDeckGrid: NowPlayingDeckGrid | null = null;
+let nowPlayingGridTimer: number | null = null;
+let nowPlayingGridFetchInFlight = false;
 let cachedTrackRefreshKey: string | null = null;
 const nowPlayingPreloadAudio = new Audio();
 nowPlayingPreloadAudio.preload = "metadata";
@@ -743,7 +757,11 @@ function micMusicalFrame(): MusicalContext | null {
   if (!analyzer) {
     return idleFrame("Press Listen to start the microphone.");
   }
-  const state = analyzer.snapshot(micCapture.now());
+  // When a Rekordbox deck is on air with an exact clock, the deck's own beat
+  // grid says where in the bar we are; the live analyser keeps everything else.
+  const liveState = analyzer.snapshot(micCapture.now());
+  const gridPhase = nowPlayingDeckGridPhase();
+  const state = applyDeckGridPhase(liveState, gridPhase);
   const energy = (state.energy - 1) / 9;
   const role = roleForPhraseKind(state.phrase.kind);
 
@@ -764,7 +782,7 @@ function micMusicalFrame(): MusicalContext | null {
     laser.notePhraseChange(phraseKey);
   }
 
-  publishLiveLaserFrame(state, phraseKey);
+  publishLiveLaserFrame(liveState, state, phraseKey);
 
   return {
     musical: {
@@ -974,9 +992,13 @@ function buildShowLaserFrame(show: ShowPackage, phrase: Phrase, phraseProgress: 
  *
  * Cue variety is keyed on the phrase occurrence so repeated drops in a set do
  * not all fire the same cue, which is the difference between a show and a
- * screensaver.
+ * screensaver. Beat timing comes from the spliced state, so a Rekordbox grid
+ * phase lands the looks on the deck's actual downbeats; the phrase itself is
+ * still the live analyser's, and its start bar is translated into the spliced
+ * bar's space by the offset between the two counters, which is constant while
+ * both advance one bar at a time.
  */
-function publishLiveLaserFrame(state: LiveMusicalState, phraseKey: string): void {
+function publishLiveLaserFrame(liveState: LiveMusicalState, state: LiveMusicalState, phraseKey: string): void {
   const phrase = livePhraseFor(liveShow, state.phrase.kind);
   liveShow.song.tempo = state.bpm;
   // Live input has no schedule to evaluate ahead, so shift the bar-relative
@@ -986,7 +1008,8 @@ function publishLiveLaserFrame(state: LiveMusicalState, phraseKey: string): void
     laser.latencyCompensationMs,
     state.bpm
   );
-  const beatsIntoPhrase = relativeBeats - state.phrase.startBar * 4;
+  const phraseStartBar = state.phrase.startBar + (state.bar - liveState.bar);
+  const beatsIntoPhrase = relativeBeats - phraseStartBar * 4;
   const frame = withLaserLook(
     buildFb4Dmx16Frame({
       show: liveShow,
@@ -1183,6 +1206,7 @@ async function boot(): Promise<void> {
   await refreshMicDevices();
   startNowPlayingPolling();
   void pollNowPlayingClockLoop();
+  void pollDeckGridLoop();
 
   try {
     const response = await fetch("/api/library");
@@ -1498,6 +1522,12 @@ async function pollNowPlayingClockLoop(): Promise<void> {
       const exact = ownsLoadedShow && clockSampleIsExact(sample) ? sample : null;
       nowPlayingClockBpm = exact && exact.bpm !== null && exact.bpm > 0 ? exact.bpm : null;
       nowPlayingClockAnchor = exact ? anchorFromClockSample(exact, Date.now(), nowPlayingDeckRate()) : null;
+      // The grid phase rides the deck track identity instead of the show id, so
+      // it also works while no show is resolved: every exact sample anchors it.
+      nowPlayingGridClock =
+        clockSampleIsExact(sample) && sample.anlzPath !== null
+          ? { anchor: anchorFromClockSample(sample, Date.now(), 1), deck: sample.deck, anlzPath: sample.anlzPath }
+          : null;
       // An exact sample from a deck other than the loaded show's own means the
       // decks have switched; ask for a prompt status re-resolve instead of
       // waiting out the 1.2 s poll with the outgoing deck's show.
@@ -1509,6 +1539,7 @@ async function pollNowPlayingClockLoop(): Promise<void> {
     } catch {
       nowPlayingClockAnchor = null;
       nowPlayingClockBpm = null;
+      nowPlayingGridClock = null;
     } finally {
       nowPlayingClockInFlight = false;
     }
@@ -1517,6 +1548,55 @@ async function pollNowPlayingClockLoop(): Promise<void> {
     nowPlayingClockTimer = null;
     void pollNowPlayingClockLoop();
   }, NOW_PLAYING_CLOCK_POLL_MS);
+}
+
+// The grid itself only changes when the deck loads another track, so polling
+// it a few times a second is plenty; identity with the clock sample decides
+// whether the cached grid may be applied.
+const NOW_PLAYING_GRID_POLL_MS = 1_500;
+
+async function pollDeckGridLoop(): Promise<void> {
+  if (inputMode === "now-playing" && !nowPlayingGridFetchInFlight) {
+    nowPlayingGridFetchInFlight = true;
+    try {
+      const response = await fetch("/api/now-playing/grid");
+      nowPlayingDeckGrid = response.ok ? validateDeckGridPayload(await response.json()) : null;
+    } catch {
+      nowPlayingDeckGrid = null;
+    } finally {
+      nowPlayingGridFetchInFlight = false;
+    }
+  }
+  nowPlayingGridTimer = window.setTimeout(() => {
+    nowPlayingGridTimer = null;
+    void pollDeckGridLoop();
+  }, NOW_PLAYING_GRID_POLL_MS);
+}
+
+/**
+ * The Rekordbox grid phase at the projected deck playhead, when it applies.
+ *
+ * Every link has to hold: the Now Playing fallback must be the driver, the
+ * status must carry an exact deck clock, the anchored sample must describe
+ * that deck's track, and the cached grid must be for the same ANLZ path.
+ */
+function nowPlayingDeckGridPhase(): DeckGridPhase | null {
+  if (inputMode !== "now-playing" || nowPlayingDriver !== "live-mic") {
+    return null;
+  }
+  const gridClock = nowPlayingGridClock;
+  const observation = nowPlayingStatus?.observation ?? null;
+  const trackSeconds =
+    gridClock !== null ? projectClockAnchor(gridClock.anchor, Date.now()) : null;
+  return deckGridPhaseForClock({
+    grid: nowPlayingDeckGrid,
+    deck: gridClock?.deck ?? null,
+    anlzPath: gridClock?.anlzPath ?? null,
+    observationDeck: observation?.deck ?? null,
+    positionSource: observation?.positionSource ?? null,
+    playbackPositionSeconds: observation?.playbackPositionSeconds ?? null,
+    trackSeconds
+  });
 }
 
 /**

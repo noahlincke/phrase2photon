@@ -148,6 +148,66 @@ def content_for_title_artist(title: str | None, artist: str | None) -> Rekordbox
 _ANALYSIS_CACHE: dict[tuple[str, str], tuple[float, dict[str, float], RekordboxAnalysis | None]] = {}
 
 
+@dataclass(frozen=True)
+class RekordboxBeatGrid:
+    """The PQTZ grid of one track: every beat's track time and the downbeats."""
+
+    beat_seconds: tuple[float, ...]
+    downbeat_indexes: tuple[int, ...]
+
+
+# Deck grids keyed on the ANLZ path, valid until that file changes. The deck
+# probe reports an absolute ANLZ path per deck, so the on-air track's grid is
+# one stat away without touching master.db.
+_GRID_CACHE: dict[tuple[str, float], RekordboxBeatGrid | None] = {}
+
+
+def load_deck_beat_grid(anlz_path: str | None) -> RekordboxBeatGrid | None:
+    """The deck track's PQTZ grid for an ANLZ path, cached per path + mtime."""
+    needle = (anlz_path or "").strip()
+    if not needle:
+        return None
+    dat_path = _dat_path_for_anlz(Path(needle))
+    if dat_path is None:
+        return None
+    try:
+        mtime = dat_path.stat().st_mtime
+    except OSError:
+        return None
+    key = (str(dat_path), mtime)
+    if key not in _GRID_CACHE:
+        _GRID_CACHE[key] = _parse_beat_grid_from_dat(dat_path)
+    return _GRID_CACHE[key]
+
+
+def _dat_path_for_anlz(path: Path) -> Path | None:
+    """The .DAT of an ANLZ entry, which may be the file or its directory."""
+    if path.is_file() and path.suffix.casefold() == ".dat":
+        return path
+    if path.is_dir():
+        matches = sorted(path.glob("*.DAT"))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _parse_beat_grid_from_dat(dat_path: Path) -> RekordboxBeatGrid | None:
+    from pyrekordbox import anlz
+
+    try:
+        pqtz = anlz.AnlzFile.parse_file(str(dat_path)).getall_tags("PQTZ")
+    except Exception:
+        return None
+    if not pqtz:
+        return None
+    beats = pqtz[0].get_beats()
+    times = pqtz[0].get_times()
+    return RekordboxBeatGrid(
+        beat_seconds=tuple(float(time) for time in times),
+        downbeat_indexes=tuple(index for index, beat in enumerate(beats) if beat == 1),
+    )
+
+
 def snap_sections_to_bar_grid(sections, analysis: RekordboxAnalysis) -> list[dict]:
     """Moves every section boundary to the nearest rekordbox bar (beat 1).
 

@@ -105,6 +105,14 @@ export interface NowPlayingClockSample {
   bpm: number | null;
   title: string | null;
   artist: string | null;
+  /**
+   * The Rekordbox ANLZ path the deck's loaded track analyses are stored under.
+   *
+   * This is the deck track's own identity: the beat grid endpoint serves the
+   * grid for exactly this path, and the live fallback may only apply a grid
+   * whose path matches the sample it projects.
+   */
+  anlzPath: string | null;
   ageMs: number | null;
   /**
    * The show the backend resolved the deck's track to, or null while
