@@ -39,7 +39,8 @@ describe("Now Playing handoff", () => {
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: null,
         armedShow: { id: "track-a", showUrl: "/api/now-playing/show/track-a" },
@@ -79,7 +80,8 @@ describe("Now Playing handoff", () => {
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: "current-show",
         armedShow: { id: "track-b", showUrl: "/api/now-playing/show/track-b" },
@@ -119,7 +121,8 @@ describe("Now Playing handoff", () => {
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: "current-show",
         armedShow: { id: "track-c", showUrl: "/api/now-playing/show/track-c" },
@@ -160,7 +163,8 @@ describe("Now Playing handoff", () => {
           observedAt: "2026-05-15T22:42:00Z",
           playbackPositionSeconds: 12,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: "track-same",
         armedShow: { id: "track-same", showUrl: "/api/now-playing/show/track-same" },
@@ -201,7 +205,8 @@ describe("Now Playing handoff", () => {
           observedAt: "2026-05-15T22:43:00Z",
           playbackPositionSeconds: 12,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: "track-live",
         armedShow: null,
@@ -236,7 +241,8 @@ describe("Now Playing handoff", () => {
           observedAt: "2026-05-15T22:40:00Z",
           playbackPositionSeconds: 12,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: null,
         armedShow: { id: "track-old", showUrl: "/api/now-playing/show/track-old" },

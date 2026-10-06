@@ -269,6 +269,23 @@ def test_parse_stream_track_line_empty_fields() -> None:
     assert track.anlz_path is None
 
 
+def test_parse_stream_track_line_strips_trailing_tick_fields() -> None:
+    # The probe prints the track line mid-tick without a newline, so the
+    # remaining decks' fields ride on it after the anlz value.
+    track = rekordbox_stream.parse_rekordbox_stream_line(
+        "track deck=2\ttitle=Track B\tartist=B\tanlz= d3=0,0.000 d4=0,0.000\n"
+    )
+    assert track == rekordbox_stream.RekordboxStreamTrack(
+        deck=2, title="Track B", artist="B", anlz_path=None
+    )
+    track = rekordbox_stream.parse_rekordbox_stream_line(
+        "track deck=1\ttitle=Track A\tartist=A\tanlz=/a/ANLZ0000.DAT d2=5,128.000\n"
+    )
+    assert track == rekordbox_stream.RekordboxStreamTrack(
+        deck=1, title="Track A", artist="A", anlz_path="/a/ANLZ0000.DAT"
+    )
+
+
 @pytest.mark.parametrize(
     "line",
     [
@@ -644,6 +661,12 @@ def test_service_clock_payload_reads_current_observation(tmp_path: Path) -> None
             captured["artist"] = observation_artist
             captured["show_id"] = show_id
             return {"status": "exact"}
+
+        def on_air_deck_number(self):
+            return None
+
+        def on_air_deck_state(self, *, observation_title=None, observation_artist=None):
+            return None
 
     observation = TrackObservation(
         source_app="Rekordbox",

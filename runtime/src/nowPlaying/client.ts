@@ -143,7 +143,8 @@ function normalizeObservation(
     observedAt: readString(record, "observedAt", "observed_at") ?? "",
     playbackPositionSeconds: readNumber(record, "playbackPositionSeconds", "playback_position_seconds"),
     positionSource: readPositionSource(record),
-    isPlaying: readBoolean(record, "isPlaying", "is_playing")
+    isPlaying: readBoolean(record, "isPlaying", "is_playing"),
+    deck: readNumber(record, "deck", "deck")
   };
 }
 

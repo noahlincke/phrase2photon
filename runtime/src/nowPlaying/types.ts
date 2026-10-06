@@ -19,6 +19,12 @@ export interface NowPlayingObservation {
    */
   positionSource: "exact" | "estimated" | null;
   isPlaying: boolean | null;
+  /**
+   * The Rekordbox deck this observation came from (1-4), or null when the
+   * source cannot say. The show and the transport clock must belong to the
+   * same deck; this is what lets the client see a deck switch in flight.
+   */
+  deck: number | null;
 }
 
 export interface NowPlayingArmedShow {

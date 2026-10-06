@@ -27,7 +27,8 @@ const OBSERVED = statusWith({
   observedAt: "2026-05-15T22:40:00Z",
   playbackPositionSeconds: 12,
   positionSource: "exact",
-  isPlaying: true
+  isPlaying: true,
+  deck: null
 });
 
 const LOST = statusWith(null);

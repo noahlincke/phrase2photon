@@ -38,6 +38,110 @@ class RekordboxAnalysis:
     bar_times: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class RekordboxContentInfo:
+    """The collection fields a deck identity needs, read from a master.db copy."""
+
+    folder_path: str | None
+    title: str | None
+    artist: str | None
+    duration_seconds: float | None
+    analysis_data_path: str | None = None
+
+
+# Collection contents keyed on the master.db mtime they were read from, so
+# deck identity lookups do not re-copy the database on every poll.
+_CONTENT_SNAPSHOT: tuple[float, tuple[RekordboxContentInfo, ...]] | None = None
+
+
+def _rekordbox_content_snapshot() -> tuple[RekordboxContentInfo, ...]:
+    global _CONTENT_SNAPSHOT
+    db_path = _rekordbox_db_path()
+    if db_path is None:
+        return ()
+    mtime = db_path.stat().st_mtime
+    if _CONTENT_SNAPSHOT is not None and _CONTENT_SNAPSHOT[0] == mtime:
+        return _CONTENT_SNAPSHOT[1]
+    loaded = _load_content_snapshot(db_path)
+    if loaded is not None:
+        _CONTENT_SNAPSHOT = (mtime, loaded)
+        return loaded
+    return ()
+
+
+def _load_content_snapshot(db_path: Path) -> tuple[RekordboxContentInfo, ...] | None:
+    from pyrekordbox import Rekordbox6Database
+    import pyrekordbox.db6.tables as tables
+
+    # A copy taken mid-WAL-checkpoint can be torn and fail to open; re-copy
+    # once before giving up on the lookup.
+    for attempt in range(2):
+        with tempfile.TemporaryDirectory(prefix="p2p-rekordbox-") as temp:
+            copied = Path(temp) / "master.db"
+            shutil.copy2(db_path, copied)
+            try:
+                database = Rekordbox6Database(path=copied, db_dir=db_path.parent, unlock=True)
+            except Exception:
+                if attempt:
+                    return None
+                continue
+            try:
+                contents = database.session.query(tables.DjmdContent).all()
+                # ArtistName rides a lazy relation, so every field is read
+                # before the session closes and detaches the rows.
+                return tuple(_content_info(content) for content in contents)
+            finally:
+                database.session.close()
+    return None
+
+
+def _content_info(content) -> RekordboxContentInfo:
+    analysis = content.AnalysisDataPath
+    length = content.Length
+    return RekordboxContentInfo(
+        folder_path=str(content.FolderPath) if content.FolderPath else None,
+        title=str(content.Title).strip() if content.Title else None,
+        artist=str(content.ArtistName).strip() if content.ArtistName else None,
+        duration_seconds=float(length) if length else None,
+        analysis_data_path=str(analysis) if analysis else None,
+    )
+
+
+def content_for_anlz_path(anlz_path: str | None) -> RekordboxContentInfo | None:
+    """Finds the collection content whose ANLZ file this is.
+
+    The database stores the ANLZ path device-relative while the probe reports
+    an absolute one, so the match rides on the database path being a suffix of
+    the probed path.
+    """
+    needle = (anlz_path or "").strip()
+    if not needle:
+        return None
+    for info in _rekordbox_content_snapshot():
+        stored = info.analysis_data_path
+        if stored and (stored == needle or needle.endswith(stored) or stored.endswith(needle)):
+            return info
+    return None
+
+
+def content_for_title_artist(title: str | None, artist: str | None) -> RekordboxContentInfo | None:
+    from phrase2photon.now_playing.identity import normalize_name
+
+    normalized_title = normalize_name(title)
+    if not normalized_title:
+        return None
+    normalized_artist = normalize_name(artist)
+    fallback = None
+    for info in _rekordbox_content_snapshot():
+        if normalize_name(info.title) != normalized_title:
+            continue
+        if fallback is None:
+            fallback = info
+        if normalized_artist and normalize_name(info.artist) == normalized_artist:
+            return info
+    return fallback
+
+
 # Parsed analysis per audio file, valid until master.db or the track's ANLZ
 # files change. Keyed on (audio path, database path); entries carry the
 # database mtime and the ANLZ mtimes the result was built from.

@@ -86,3 +86,21 @@ export function clockSampleIsJump(
   const drift = projectClockAnchor(anchor, nowMs) - clockSamplePositionSeconds(sample);
   return Math.abs(drift) > NOW_PLAYING_JUMP_SECONDS;
 }
+
+/**
+ * True when an exact sample describes a deck other than the one the loaded
+ * show's observation came from: the decks have switched and the status has not
+ * caught up yet, so the client asks for a prompt re-resolve instead of waiting
+ * out the 1.2 s status poll.
+ */
+export function clockSampleNeedsStatusRefresh(
+  sample: NowPlayingClockSample,
+  loadedObservationDeck: number | null
+): boolean {
+  return (
+    sample.status === "exact" &&
+    sample.deck !== null &&
+    loadedObservationDeck !== null &&
+    sample.deck !== loadedObservationDeck
+  );
+}

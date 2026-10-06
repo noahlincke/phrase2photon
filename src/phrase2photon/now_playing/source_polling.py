@@ -18,6 +18,10 @@ from phrase2photon.now_playing.models import (
     SourceDiagnostics,
     TrackObservation,
 )
+from phrase2photon.now_playing.rekordbox_analysis import (
+    content_for_anlz_path,
+    content_for_title_artist,
+)
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 OpenAudioStateFn = Callable[[], dict[Path, int]]
@@ -1036,6 +1040,47 @@ def _matching_rekordbox_memory_state(
             continue
         return state
     return None
+
+
+def observation_from_memory_deck_state(
+    state: RekordboxMemoryDeckState,
+    *,
+    is_playing: bool | None,
+) -> TrackObservation | None:
+    """Builds the on-air deck's observation from its own memory state.
+
+    Identity (title, artist and the audio file the prepared show is looked up
+    by) comes from the deck's loaded track, not from the agent log's last
+    loaded track, so the show always belongs to the deck the clock follows.
+    The file is resolved from the deck's ANLZ path through master.db, falling
+    back to a title+artist match in the collection; without either the log
+    observation stands.
+    """
+    if not state.title:
+        return None
+    info = content_for_anlz_path(state.anlz_path)
+    if info is None:
+        info = content_for_title_artist(state.title, state.artist)
+    if info is None or not info.folder_path:
+        return None
+    position = (
+        None
+        if state.sample_position is None
+        else max(0.0, state.sample_position / REKORDBOX_MEMORY_SAMPLE_RATE_HZ)
+    )
+    return TrackObservation(
+        source_app="Rekordbox",
+        title=state.title,
+        artist=state.artist if state.artist is not None else info.artist,
+        album=state.album,
+        duration_seconds=info.duration_seconds or 1.0,
+        observed_at=datetime.now(timezone.utc),
+        source_hint_path=Path(info.folder_path),
+        playback_position_seconds=position,
+        position_source=None if position is None else "exact",
+        is_playing=is_playing,
+        deck=state.deck,
+    )
 
 
 def _apply_rekordbox_open_file_baseline(

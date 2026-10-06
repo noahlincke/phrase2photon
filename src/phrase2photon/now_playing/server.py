@@ -42,6 +42,7 @@ from phrase2photon.now_playing.rekordbox_stream import RekordboxMemoryStream
 from phrase2photon.now_playing.source_polling import (
     last_rekordbox_diagnostics,
     now_playing_cache_root,
+    observation_from_memory_deck_state,
     poll_rekordbox,
     poll_system_now_playing,
     poll_virtualdj,
@@ -143,6 +144,7 @@ class NowPlayingService:
         self._resolved: ResolvedNowPlayingTrack | None = None
         self._latest_observed_at = None
         self._last_refresh_monotonic = 0.0
+        self._last_on_air_deck: int | None = None
         self._preparing_key: str | None = None
         self._preparing_payload: dict[str, str] | None = None
         self._preparing_attempts: list[ProviderAttempt] = []
@@ -163,17 +165,34 @@ class NowPlayingService:
             active_show_id = self._status.get("activeShowId")
         title = observation.get("title") if isinstance(observation, dict) else None
         artist = observation.get("artist") if isinstance(observation, dict) else None
-        return self.memory_stream.clock_payload(
+        observation_deck = observation.get("deck") if isinstance(observation, dict) else None
+        payload = self.memory_stream.clock_payload(
             observation_title=title if isinstance(title, str) else None,
             observation_artist=artist if isinstance(artist, str) else None,
             # The show the backend resolved the deck's track to; the clock sample
             # must never drive a show it does not belong to.
             show_id=active_show_id if isinstance(active_show_id, str) else None,
         )
+        # While the status still describes the outgoing deck, a sample from the
+        # incoming one belongs to no show yet; handing it the old show id would
+        # run that show at the wrong deck's playhead.
+        if (
+            payload.get("deck") is not None
+            and observation_deck is not None
+            and payload.get("deck") != observation_deck
+        ):
+            payload["showId"] = None
+        return payload
 
     def refresh(self, *, force: bool = False) -> dict[str, object]:
         with self._lock:
             now_monotonic = time.monotonic()
+            # A deck switch must resolve immediately: the outgoing deck's show
+            # rides a playhead that no longer belongs to it until this happens.
+            on_air_deck = self.memory_stream.on_air_deck_number()
+            if not force and on_air_deck is not None and on_air_deck != self._last_on_air_deck:
+                force = True
+            self._last_on_air_deck = on_air_deck
             if (
                 not force
                 and self._last_refresh_monotonic
@@ -181,7 +200,7 @@ class NowPlayingService:
             ):
                 return copy.deepcopy(self._status)
 
-            observation = self.poll_source()
+            observation = _prefer_on_air_deck(self.poll_source(), self.memory_stream)
             self._last_refresh_monotonic = now_monotonic
 
             if observation is None:
@@ -530,6 +549,39 @@ def poll_now_playing_source() -> TrackObservation | None:
     if not observations:
         return None
     return max(observations, key=lambda observation: observation.observed_at)
+
+
+def _prefer_on_air_deck(
+    observation: TrackObservation | None,
+    memory_stream: RekordboxMemoryStream,
+) -> TrackObservation | None:
+    """Replaces the polled observation with the on-air deck's own track.
+
+    The agent log records the last loaded track, which lags a transition: while
+    the previous deck still plays, the log already describes the incoming one.
+    The memory stream's playing-deck rule decides which deck is on air, so the
+    show and the transport clock always come from the same deck. A deck that is
+    actually playing outranks every other source — a paused Music.app holding
+    the incoming track must not outvote it — while a paused deck only corrects
+    the Rekordbox observation. The log observation survives whenever the stream
+    cannot provide an on-air track.
+    """
+    on_air = memory_stream.on_air_deck_state(
+        observation_title=observation.title if observation is not None else None,
+        observation_artist=observation.artist if observation is not None else None,
+    )
+    if on_air is None:
+        return observation
+    deck_observation = observation_from_memory_deck_state(
+        on_air.state, is_playing=on_air.is_playing
+    )
+    if deck_observation is None:
+        return observation
+    if observation is None:
+        return deck_observation if on_air.is_playing else None
+    if observation.source_app == "Rekordbox" or on_air.is_playing:
+        return deck_observation
+    return observation
 
 
 def _matches_exact_disk_source_hint(observation: TrackObservation, candidate: ProviderCandidate) -> bool:

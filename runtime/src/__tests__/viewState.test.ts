@@ -33,7 +33,8 @@ describe("view-state helpers", () => {
           observedAt: "2026-06-13T18:12:00Z",
           playbackPositionSeconds: 37,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: null,
         armedShow: null,

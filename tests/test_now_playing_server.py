@@ -861,6 +861,12 @@ def test_service_clock_payload_passes_resolved_show_identity(tmp_path: Path) -> 
             captured["show_id"] = show_id
             return {"status": "exact"}
 
+        def on_air_deck_number(self):
+            return None
+
+        def on_air_deck_state(self, *, observation_title=None, observation_artist=None):
+            return None
+
     audio_path = tmp_path / "example-set.wav"
     audio_path.write_bytes(b"RIFFexample")
     show_dir = tmp_path / "compiled-show"

@@ -7,6 +7,7 @@ fresh samples instead of waiting for the 1.2 s status poll.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 import time
@@ -73,6 +74,15 @@ class RekordboxStreamDeckSample:
         if self.previous_sample_position is None:
             return self.sample_position > 0
         return self.sample_position != self.previous_sample_position
+
+
+@dataclass(frozen=True)
+class RekordboxOnAirDeck:
+    """The deck the playing-deck rule put on air, with its loaded track."""
+
+    deck: int
+    state: RekordboxMemoryDeckState
+    is_playing: bool | None
 
 
 @dataclass(frozen=True)
@@ -255,6 +265,11 @@ def _parse_stream_track(line: str) -> RekordboxStreamTrack | None:
     title, artist, anlz = (
         field[len(prefix):] or None for field, prefix in zip(fields[1:], prefixes)
     )
+    # The probe prints the track line mid-tick without a newline, so the
+    # remaining decks' fields land on it; an ANLZ path never contains a
+    # " d<deck>=" fragment, so cut the first one off.
+    if anlz is not None:
+        anlz = re.split(r" d[1-4]=", anlz, maxsplit=1)[0] or None
     return RekordboxStreamTrack(deck=deck, title=title, artist=artist, anlz_path=anlz)
 
 
@@ -377,6 +392,49 @@ class RekordboxMemoryStream:
     def status(self) -> str | None:
         with self._lock:
             return self._status
+
+    def on_air_deck_number(self) -> int | None:
+        """The deck the playing-deck rule selects while the stream is exact."""
+        now = self._clock()
+        with self._lock:
+            if not self._exact_locked(now):
+                return None
+            return self._active_deck_locked(None, None)
+
+    def on_air_deck_state(
+        self,
+        *,
+        observation_title: str | None,
+        observation_artist: str | None,
+    ) -> RekordboxOnAirDeck | None:
+        """The on-air deck's loaded track while the stream is exact and fresh.
+
+        This is the same playing-deck rule the transport clock follows, so the
+        show resolved from it always rides the deck the clock rides.
+        """
+        now = self._clock()
+        with self._lock:
+            if not self._exact_locked(now):
+                return None
+            deck = self._active_deck_locked(observation_title, observation_artist)
+            if deck is None:
+                return None
+            track = self._tracks[deck - 1]
+            if track is None or not track.title:
+                return None
+            sample = self._samples[deck - 1]
+            return RekordboxOnAirDeck(
+                deck=deck,
+                state=self._memory_states_locked()[deck - 1],
+                is_playing=None if sample is None else sample.is_playing,
+            )
+
+    def _exact_locked(self, now: float) -> bool:
+        if self._status != "exact":
+            return False
+        return not (
+            self._last_tick_at is None or now - self._last_tick_at > STREAM_STALE_SECONDS
+        )
 
     def clock_payload(
         self,

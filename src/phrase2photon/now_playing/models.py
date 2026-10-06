@@ -29,6 +29,9 @@ class TrackObservation(BaseModel):
     playback_position_seconds: float | None = Field(default=None, ge=0)
     position_source: PositionSource | None = None
     is_playing: bool | None = None
+    # The rekordbox deck this observation came from, so the UI and tests can
+    # see that the show and the transport clock belong to the same deck.
+    deck: int | None = Field(default=None, ge=1, le=4)
 
 
 class OpenAudioCandidateDiagnostic(BaseModel):

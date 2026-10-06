@@ -68,7 +68,8 @@ describe("fetchNowPlayingStatus", () => {
           observed_at: "2026-05-16T20:59:53.878731Z",
           playback_position_seconds: 48.25,
           position_source: "estimated",
-          is_playing: true
+          is_playing: true,
+          deck: 1
         },
         activeShowId: "f1b5cc5958f1c263",
         armedShow: {
@@ -121,7 +122,8 @@ describe("fetchNowPlayingStatus", () => {
       observedAt: "2026-05-16T20:59:53.878731Z",
       playbackPositionSeconds: 48.25,
       positionSource: "estimated",
-      isPlaying: true
+      isPlaying: true,
+      deck: 1
     });
     expect(payload.modeState).toBe("premade_active");
     expect(payload.activeShowId).toBe("f1b5cc5958f1c263");

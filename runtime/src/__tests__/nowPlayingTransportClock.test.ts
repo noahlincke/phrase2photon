@@ -30,7 +30,8 @@ describe("now-playing transport clock", () => {
           observedAt: "2026-05-16T21:50:25.000Z",
           playbackPositionSeconds: 127.25,
           positionSource: "estimated",
-          isPlaying: true
+          isPlaying: true,
+          deck: null
         },
         activeShowId: "show-a",
         armedShow: null,
@@ -61,7 +62,8 @@ describe("now-playing transport clock", () => {
           observedAt: "2026-05-16T21:50:25.000Z",
           playbackPositionSeconds: 127.25,
           positionSource: "estimated",
-          isPlaying: false
+          isPlaying: false,
+          deck: null
         },
         activeShowId: "show-a",
         armedShow: null,
@@ -91,7 +93,8 @@ describe("now-playing transport clock", () => {
         observedAt: "2026-05-16T20:59:53.878731Z",
         playbackPositionSeconds: 48.25,
         positionSource: "estimated",
-        isPlaying: true
+        isPlaying: true,
+        deck: null
       },
       activeShowId: "track-a",
       armedShow: null,
@@ -118,7 +121,8 @@ describe("nowPlayingClockIsExact", () => {
     observedAt: "2026-05-16T20:59:53.878731Z",
     playbackPositionSeconds: 48.25,
     positionSource: "exact",
-    isPlaying: true
+    isPlaying: true,
+    deck: null
   };
 
   const statusWith = (overrides: Partial<NowPlayingObservation>): NowPlayingStatus =>
@@ -162,7 +166,8 @@ describe("heldClockStatus", () => {
     observedAt: "2026-05-16T20:59:53.878731Z",
     playbackPositionSeconds: 120.5,
     positionSource: "exact",
-    isPlaying: true
+    isPlaying: true,
+    deck: null
   };
   const heldA = { observation: observationA, showId: "show-a" };
   const statusWithoutObservation: NowPlayingStatus = {
@@ -237,7 +242,8 @@ describe("deck bpm consumers", () => {
       observedAt: "2026-05-16T21:50:25.000Z",
       playbackPositionSeconds: 127.25,
       positionSource: "exact",
-      isPlaying: true
+      isPlaying: true,
+      deck: null
     },
     activeShowId: "show-b",
     armedShow: null,

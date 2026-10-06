@@ -4,6 +4,7 @@ import {
   anchorFromClockSample,
   clockSampleIsExact,
   clockSampleIsJump,
+  clockSampleNeedsStatusRefresh,
   NOW_PLAYING_JUMP_SECONDS,
   projectClockAnchor
 } from "../nowPlaying/exactClock.js";
@@ -110,5 +111,26 @@ describe("pitched-deck rate", () => {
     const anchor = anchorFromClockSample(exact({ positionSeconds: 20, ageMs: 100 }), 1000);
     expect(anchor.positionSeconds).toBeCloseTo(20.1, 5);
     expect(projectClockAnchor(anchor, 2000)).toBeCloseTo(21.1, 5);
+  });
+});
+
+describe("deck-switch status refresh", () => {
+  it("asks for a re-resolve when the sample deck differs from the loaded show's deck", () => {
+    expect(clockSampleNeedsStatusRefresh(sample({ deck: 2 }), 1)).toBe(true);
+  });
+
+  it("stays quiet while the sample deck matches", () => {
+    expect(clockSampleNeedsStatusRefresh(sample({ deck: 1 }), 1)).toBe(false);
+  });
+
+  it("cannot compare without a deck on either side", () => {
+    expect(clockSampleNeedsStatusRefresh(sample({ deck: null }), 1)).toBe(false);
+    expect(clockSampleNeedsStatusRefresh(sample({ deck: 2 }), null)).toBe(false);
+  });
+
+  it("ignores samples that are not exact", () => {
+    expect(clockSampleNeedsStatusRefresh(sample({ deck: 2, status: "not-running" }), 1)).toBe(
+      false
+    );
   });
 });

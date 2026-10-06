@@ -39,6 +39,7 @@ import { fetchNowPlayingClock, fetchNowPlayingStatus } from "../nowPlaying/clien
 import {
   anchorFromClockSample,
   clockSampleIsExact,
+  clockSampleNeedsStatusRefresh,
   projectClockAnchor,
   type ClockSampleAnchor
 } from "../nowPlaying/exactClock.js";
@@ -1496,6 +1497,14 @@ async function pollNowPlayingClockLoop(): Promise<void> {
       const exact = ownsLoadedShow && clockSampleIsExact(sample) ? sample : null;
       nowPlayingClockBpm = exact && exact.bpm !== null && exact.bpm > 0 ? exact.bpm : null;
       nowPlayingClockAnchor = exact ? anchorFromClockSample(exact, Date.now(), nowPlayingDeckRate()) : null;
+      // An exact sample from a deck other than the loaded show's own means the
+      // decks have switched; ask for a prompt status re-resolve instead of
+      // waiting out the 1.2 s poll with the outgoing deck's show.
+      if (
+        clockSampleNeedsStatusRefresh(sample, nowPlayingStatus?.observation?.deck ?? null)
+      ) {
+        requestNowPlayingPollNow();
+      }
     } catch {
       nowPlayingClockAnchor = null;
       nowPlayingClockBpm = null;
