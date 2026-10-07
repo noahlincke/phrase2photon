@@ -36,8 +36,19 @@ export const SHELL_TEMPLATE = /* html */ `
       <div class="transport" id="transport">
         <button id="playButton" class="primary-button" type="button">Play</button>
         <div class="transport-main">
-          <canvas id="audioTimeline" class="audio-timeline" aria-label="Audio timeline"></canvas>
-          <input id="scrub" type="range" min="0" max="1" step="0.001" value="0" aria-label="Seek" />
+          <div class="timeline-wrap">
+            <canvas
+              id="audioTimeline"
+              class="audio-timeline"
+              role="slider"
+              tabindex="0"
+              aria-label="Seek"
+              aria-valuemin="0"
+              aria-valuenow="0"
+              aria-valuemax="0"
+            ></canvas>
+            <div id="timelineEmpty" class="timeline-empty">Waiting for audio</div>
+          </div>
         </div>
         <div class="transport-meta">
           <strong id="nowLabel">No source</strong>

@@ -68,7 +68,42 @@ test("loads a compiled show and reports its musical position", async ({ page }) 
   await expect(page.locator("#nowLabel")).toHaveText("Kolter - Let You Go");
   await expect(page.locator("#nowTime")).toContainText("/ 6:48");
   await expect(page.locator("#hudPosition")).toContainText("bar");
+
+  // The strip renders at device resolution, not from a stale backing store
+  // stretched by CSS, and the empty-state line is gone once audio is in.
+  await expect
+    .poll(() => page.locator("#audioTimeline").evaluate((el) => (el as HTMLCanvasElement).width))
+    .toBeGreaterThan(200);
+  await expect(page.locator("#timelineEmpty")).toBeHidden();
   expect(errors).toEqual([]);
+});
+
+test("shows the quiet empty state and seeks from the timeline strip", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  await page.locator("#libraryMode").click();
+
+  // No track yet: one quiet line, no border clutter.
+  await expect(page.locator("#timelineEmpty")).toHaveText("Waiting for audio");
+
+  await page.locator(".track-card .track-select").first().click();
+  await expect.poll(() =>
+    page.evaluate(() => window.__PHRASE2PHOTON_DEBUG__?.state().loadedTrackId ?? null)
+  ).not.toBeNull();
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector<HTMLAudioElement>("#audio")!.duration))
+    .toBeGreaterThan(0);
+
+  // The strip is the seek control in Library mode; clicking near its end
+  // should land well past the halfway point of the 6:48 track.
+  const strip = await page.locator("#audioTimeline").boundingBox();
+  if (!strip) {
+    throw new Error("timeline strip is missing");
+  }
+  await page.mouse.click(strip.x + strip.width * 0.75, strip.y + strip.height / 2);
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector<HTMLAudioElement>("#audio")!.currentTime))
+    .toBeGreaterThan(240);
 });
 
 test("follows the arrangement by changing scene at phrase boundaries", async ({ page }) => {

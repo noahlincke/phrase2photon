@@ -188,12 +188,42 @@ body.export-mode .app {
   display: none;
 }
 
+.timeline-wrap {
+  position: relative;
+  height: 46px;
+  min-width: 0;
+}
+
 .audio-timeline {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
-  height: 46px;
-  border-radius: 5px;
+  height: 100%;
+  border-radius: 6px;
   background: rgba(148, 163, 184, 0.05);
+}
+
+/* Only Library mode owns the transport; elsewhere the strip is read-only. */
+.transport.seekable .audio-timeline {
+  cursor: pointer;
+}
+
+.audio-timeline:focus-visible {
+  outline: 1px solid rgba(148, 163, 184, 0.45);
+  outline-offset: 2px;
+}
+
+.timeline-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
 }
 
 .transport-meta {
@@ -793,9 +823,4 @@ a {
   height: 100%;
   background: var(--accent);
   transition: width 240ms ease;
-}
-
-#scrub {
-  width: 100%;
-  accent-color: var(--accent);
 }

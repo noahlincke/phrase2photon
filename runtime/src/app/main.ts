@@ -1,7 +1,7 @@
 import "./styles.css";
 
 import { AudioAnalyser } from "./audioAnalyser.js";
-import { AudioTimeline, loadWaveformPeaks, type TimelinePhrase } from "./audioTimeline.js";
+import { AudioTimeline, inferPhraseKind, loadWaveformPeaks, type TimelinePhrase } from "./audioTimeline.js";
 import { DISPLAY_LATENCY_KEY, displayPlaybackSeconds, parseDisplayLatencyMs } from "./displayLatency.js";
 import { escapeHtml, formatTime } from "./html.js";
 import { LaserConsole } from "./laserConsole.js";
@@ -113,9 +113,9 @@ const ui = {
   canvas: required<HTMLCanvasElement>("visualizer"),
   audio: required<HTMLAudioElement>("audio"),
   audioTimeline: required<HTMLCanvasElement>("audioTimeline"),
+  timelineEmpty: required<HTMLElement>("timelineEmpty"),
   transport: required<HTMLDivElement>("transport"),
   playButton: required<HTMLButtonElement>("playButton"),
-  scrub: required<HTMLInputElement>("scrub"),
   nowLabel: required<HTMLElement>("nowLabel"),
   nowTime: required<HTMLElement>("nowTime"),
   fullscreenButton: required<HTMLButtonElement>("fullscreenButton"),
@@ -171,7 +171,7 @@ const ui = {
 };
 
 const visuals = new VisualSystem(ui.canvas);
-const timeline = new AudioTimeline(ui.audioTimeline);
+const timeline = new AudioTimeline(ui.audioTimeline, ui.timelineEmpty);
 const fileAnalyser = new AudioAnalyser();
 const micCapture = new MicCapture();
 const deckFollower = new TrackFollowerSession();
@@ -608,18 +608,65 @@ ui.playButton.addEventListener("click", async () => {
   updateTransportChrome();
 });
 
-ui.scrub.addEventListener("input", () => {
-  if (!loadedSourceKind || !isBrowserAudioTransportSource(loadedSourceKind)) {
+// Seeking lives on the timeline strip itself, and only in Library mode where
+// the browser owns the transport; Now Playing is display-only.
+let seekPointerId: number | null = null;
+
+function libraryTransportReady(): boolean {
+  return (
+    loadedSourceKind === "library" &&
+    loaded !== null &&
+    Number.isFinite(ui.audio.duration) &&
+    ui.audio.duration > 0
+  );
+}
+
+function seekFromPointer(event: PointerEvent): void {
+  if (!libraryTransportReady()) {
     return;
   }
-  if (Number.isFinite(ui.audio.duration)) {
-    ui.audio.currentTime = Number(ui.scrub.value) * ui.audio.duration;
+  const rect = ui.audioTimeline.getBoundingClientRect();
+  const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+  ui.audio.currentTime = fraction * ui.audio.duration;
+}
+
+ui.audioTimeline.addEventListener("pointerdown", (event) => {
+  seekFromPointer(event);
+  seekPointerId = event.pointerId;
+  ui.audioTimeline.setPointerCapture(event.pointerId);
+});
+
+ui.audioTimeline.addEventListener("pointermove", (event) => {
+  if (seekPointerId === event.pointerId) {
+    seekFromPointer(event);
   }
+});
+
+const endSeek = (event: PointerEvent) => {
+  if (seekPointerId === event.pointerId) {
+    seekPointerId = null;
+  }
+};
+ui.audioTimeline.addEventListener("pointerup", endSeek);
+ui.audioTimeline.addEventListener("pointercancel", endSeek);
+
+ui.audioTimeline.addEventListener("keydown", (event) => {
+  if (!libraryTransportReady()) {
+    return;
+  }
+  const step = event.key === "ArrowLeft" ? -5 : event.key === "ArrowRight" ? 5 : 0;
+  if (!step) {
+    return;
+  }
+  const next = Math.min(ui.audio.duration, Math.max(0, ui.audio.currentTime + step));
+  ui.audio.currentTime = next;
+  event.preventDefault();
 });
 
 ui.audio.addEventListener("play", updateTransportChrome);
 ui.audio.addEventListener("pause", updateTransportChrome);
 ui.audio.addEventListener("loadedmetadata", () => {
+  ui.audioTimeline.setAttribute("aria-valuemax", String(Math.round(ui.audio.duration) || 0));
   if (loaded && loadedSourceKind === "library") {
     schedule = buildPhraseSchedule(loaded.show, ui.audio.duration);
   }
@@ -692,10 +739,10 @@ function updateShowButton(): void {
 }
 
 function updateTransportChrome(): void {
+  ui.transport.classList.toggle("seekable", loadedSourceKind === "library");
   if (isMicMode()) {
     ui.playButton.textContent = micCapture.running ? "Stop" : "Listen";
     ui.playButton.disabled = false;
-    ui.scrub.disabled = true;
     ui.micStart.textContent = micCapture.running ? "Stop listening" : "Start listening";
     ui.nowLabel.textContent = micCapture.running ? "Listening" : "Mic idle";
     ui.nowTime.textContent = "live";
@@ -704,7 +751,6 @@ function updateTransportChrome(): void {
   if (inputMode === "now-playing" && !isBrowserAudioTransportSource(loadedSourceKind ?? "library")) {
     ui.playButton.textContent = "Synced";
     ui.playButton.disabled = true;
-    ui.scrub.disabled = true;
     // The premade driver names the show it is running; the live fallback names
     // the deck's own track, since the loaded show is not what is playing.
     ui.nowLabel.textContent = nowPlayingTransportLabel({
@@ -717,7 +763,6 @@ function updateTransportChrome(): void {
   }
   ui.playButton.textContent = ui.audio.paused ? "Play" : "Pause";
   ui.playButton.disabled = false;
-  ui.scrub.disabled = false;
   ui.nowLabel.textContent = loaded?.libraryTrack.title ?? "No source";
 }
 
@@ -953,9 +998,8 @@ function updateHud(context: MusicalContext): void {
     const duration = currentPlaybackDuration() ?? 0;
     ui.nowTime.textContent = `${formatTime(seconds)} / ${formatTime(duration)}`;
     ui.nowLabel.textContent = loaded.libraryTrack.title;
-    if (duration > 0) {
-      ui.scrub.value = String(seconds / duration);
-    }
+    ui.audioTimeline.setAttribute("aria-valuenow", String(Math.round(seconds)));
+    ui.audioTimeline.setAttribute("aria-valuetext", `${formatTime(seconds)} of ${formatTime(duration)}`);
     renderTimeline(context.phraseId);
   }
 
@@ -979,11 +1023,9 @@ function renderTimeline(activePhraseId: string | null): void {
     return;
   }
   timeline.render({
-    mode: "known",
     peaks: libraryWaveformPeaks,
     durationSeconds: duration,
     currentSeconds: currentPlaybackSeconds() ?? 0,
-    grid: gridFor(loaded.show),
     phrases: schedule.map(timelinePhrase),
     activePhraseId
   });
@@ -993,6 +1035,7 @@ function timelinePhrase(entry: ScheduledPhrase): TimelinePhrase {
   return {
     phraseId: entry.phrase.phrase_id,
     name: entry.phrase.name,
+    kind: inferPhraseKind(entry.phrase.name, entry.phrase.energy.level),
     startSeconds: entry.startSeconds,
     endSeconds: entry.endSeconds
   };

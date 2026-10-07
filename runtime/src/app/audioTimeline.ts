@@ -1,236 +1,300 @@
-import { beatsToSeconds, secondsToBeats, type BeatGrid } from "../show/beatGrid.js";
+import type { EnergyLevel } from "../show/types.js";
+
+export type PhraseKind = "intro" | "build" | "drop" | "breakdown" | "groove" | "outro";
 
 export interface TimelinePhrase {
   phraseId: string;
   name: string;
+  kind: PhraseKind;
   startSeconds: number;
   endSeconds: number;
 }
 
-export interface TimelineSample {
-  seconds: number;
-  level: number;
+export interface AudioTimelineInput {
+  peaks: number[];
+  durationSeconds: number;
+  currentSeconds: number;
+  phrases: TimelinePhrase[];
+  activePhraseId: string | null;
 }
 
-export type AudioTimelineInput =
-  | {
-      mode: "known";
-      peaks: number[];
-      durationSeconds: number;
-      currentSeconds: number;
-      grid: BeatGrid;
-      phrases: TimelinePhrase[];
-      activePhraseId: string | null;
+export const DEFAULT_TIMELINE_EMPTY_MESSAGE = "Waiting for audio";
+
+/**
+ * One colour per musical phrase kind, keyed off the accent palette: drops get
+ * the app accent, quiet sections get cool colours, transitions get warm ones.
+ */
+const PHRASE_COLORS: Record<PhraseKind, string> = {
+  intro: "125, 211, 252",
+  build: "251, 191, 36",
+  drop: "217, 255, 0",
+  breakdown: "167, 139, 250",
+  groove: "52, 211, 153",
+  outro: "148, 163, 184"
+};
+
+const KIND_LABELS: Record<PhraseKind, string> = {
+  intro: "Intro",
+  build: "Build",
+  drop: "Drop",
+  breakdown: "Breakdown",
+  groove: "Groove",
+  outro: "Outro"
+};
+
+/**
+ * Infers the musical kind of a phrase from its arrangement name, falling back
+ * to energy. Mirrors roleForPhrase in visualPresets.ts but keeps the full
+ * six-kind vocabulary the timeline colours need.
+ */
+export function inferPhraseKind(name: string, energyLevel: EnergyLevel): PhraseKind {
+  const lowered = name.toLowerCase();
+  if (lowered.includes("intro")) {
+    return "intro";
+  }
+  if (lowered.includes("outro")) {
+    return "outro";
+  }
+  if (lowered.includes("break") || lowered.includes("strip")) {
+    return "breakdown";
+  }
+  if (lowered.includes("build") || lowered.includes("lift") || lowered.includes("riser")) {
+    return "build";
+  }
+  if (lowered.includes("drop")) {
+    return "drop";
+  }
+  return energyLevel === "peak" ? "drop" : energyLevel === "low" ? "breakdown" : "groove";
+}
+
+/**
+ * The label shown on a phrase band. Compiled shows carry arrangement names
+ * like "Bass In" but also bare bar numbers like "24", which say nothing; a
+ * numbered or blank phrase gets its kind name instead.
+ */
+export function timelineLabelText(phrase: Pick<TimelinePhrase, "name" | "kind">): string {
+  const name = phrase.name.trim();
+  return /\p{L}/u.test(name) ? name : KIND_LABELS[phrase.kind];
+}
+
+/**
+ * Shortens a label to fit a band without ever stretching or squeezing text.
+ * Returns null when even one character does not fit.
+ */
+export function fitTimelineLabel(
+  text: string,
+  maxWidth: number,
+  measure: (text: string) => number
+): string | null {
+  if (measure(text) <= maxWidth) {
+    return text;
+  }
+  let candidate = text;
+  while (candidate.length > 1) {
+    candidate = candidate.slice(0, -1);
+    if (measure(candidate) <= maxWidth) {
+      return candidate;
     }
-  | {
-      mode: "live";
-      samples: TimelineSample[];
-      currentSeconds: number;
-      windowSeconds: number;
-      bpm: number;
-      phrases: TimelinePhrase[];
-      activePhraseId: string | null;
-    };
+  }
+  return null;
+}
 
+interface TimelineBand {
+  phrase: TimelinePhrase;
+  left: number;
+  width: number;
+  active: boolean;
+}
+
+/**
+ * The transport timeline strip.
+ *
+ * A single DPR-aware canvas: phrase bands with small labels, a slim mirrored
+ * waveform envelope, and a thin playhead. The empty state is a plain DOM line
+ * over the strip, so no text is ever painted stretched across the canvas.
+ */
 export class AudioTimeline {
+  private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D;
-  private width = 1;
-  private height = 1;
+  private readonly emptyLine: HTMLElement;
+  private cssWidth = 0;
+  private cssHeight = 0;
+  private dpr = 0;
+  private envelope: { peaks: number[]; width: number; height: number; path: Path2D } | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, emptyLine: HTMLElement) {
     const context = canvas.getContext("2d");
     if (!context) {
       throw new Error("Audio timeline canvas is unavailable.");
     }
+    this.canvas = canvas;
     this.context = context;
-    this.resize();
+    this.emptyLine = emptyLine;
+    this.clear();
   }
 
+  /**
+   * Re-measures on every render: the strip starts life hidden behind the mic
+   * mode and mode switches never fire a resize event, so the backing store
+   * has to follow the laid-out box instead of trusting stale sizes.
+   */
   resize(): void {
     const rect = this.canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.width = Math.max(1, Math.floor(rect.width));
-    this.height = Math.max(1, Math.floor(rect.height));
-    this.canvas.width = Math.floor(this.width * dpr);
-    this.canvas.height = Math.floor(this.height * dpr);
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    if (width === this.cssWidth && height === this.cssHeight && dpr === this.dpr) {
+      return;
+    }
+    this.cssWidth = width;
+    this.cssHeight = height;
+    this.dpr = dpr;
+    this.canvas.width = Math.round(width * dpr);
+    this.canvas.height = Math.round(height * dpr);
     this.context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.envelope = null;
   }
 
-  clear(message = "Audio timeline waiting for input."): void {
-    this.drawBackground();
-    this.context.fillStyle = "rgba(203, 213, 225, 0.82)";
-    this.context.font = "12px Inter, sans-serif";
-    this.context.fillText(message, 14, this.height / 2 + 4);
+  clear(message: string = DEFAULT_TIMELINE_EMPTY_MESSAGE): void {
+    this.resize();
+    this.context.clearRect(0, 0, this.cssWidth, this.cssHeight);
+    this.envelope = null;
+    this.emptyLine.textContent = message;
+    this.emptyLine.hidden = false;
   }
 
   render(input: AudioTimelineInput): void {
-    this.drawBackground();
-    if (input.mode === "known") {
-      this.renderKnown(input);
-    } else {
-      this.renderLive(input);
-    }
+    this.resize();
+    this.emptyLine.hidden = true;
+    this.context.clearRect(0, 0, this.cssWidth, this.cssHeight);
+    const bands = this.layoutBands(input);
+    this.drawPhraseBands(bands);
+    this.drawWaveform(input);
+    this.drawPhraseLabels(bands);
+    this.drawPlayhead(input);
   }
 
-  private renderKnown(input: Extract<AudioTimelineInput, { mode: "known" }>): void {
+  private layoutBands(input: AudioTimelineInput): TimelineBand[] {
     const duration = Math.max(0.001, input.durationSeconds);
-    this.drawBeatGrid(0, this.width, 0, duration, 0, input.grid);
-    this.drawPhraseSpans(input.phrases, input.activePhraseId, 0, this.width, 0, duration);
-    this.drawPeaks(input.peaks, 0, this.width, "rgba(217, 255, 0, 0.72)");
-    const markerX = clamp(input.currentSeconds / duration, 0, 1) * this.width;
-    this.drawMarker(markerX, `${formatTime(input.currentSeconds)} / ${formatTime(duration)}`);
-  }
-
-  private renderLive(input: Extract<AudioTimelineInput, { mode: "live" }>): void {
-    const markerX = this.width * 0.5;
-    const windowSeconds = Math.max(1, input.windowSeconds);
-    const startSeconds = Math.max(0, input.currentSeconds - windowSeconds);
-    this.context.fillStyle = "rgba(15, 23, 42, 0.68)";
-    this.context.fillRect(markerX, 0, this.width - markerX, this.height);
-    this.drawBeatGrid(0, markerX, startSeconds, input.currentSeconds, input.bpm);
-    this.drawPhraseSpans(input.phrases, input.activePhraseId, 0, markerX, startSeconds, input.currentSeconds);
-    this.drawLiveSamples(input.samples, markerX, startSeconds, input.currentSeconds);
-    this.drawMarker(markerX, `live ${formatTime(input.currentSeconds)}`);
-  }
-
-  private drawBackground(): void {
-    this.context.clearRect(0, 0, this.width, this.height);
-    this.context.fillStyle = "rgba(5, 7, 10, 0.88)";
-    this.context.fillRect(0, 0, this.width, this.height);
-    this.context.strokeStyle = "rgba(148, 163, 184, 0.2)";
-    this.context.strokeRect(0.5, 0.5, this.width - 1, this.height - 1);
-    this.context.strokeStyle = "rgba(148, 163, 184, 0.12)";
-    this.context.beginPath();
-    this.context.moveTo(0, this.height / 2);
-    this.context.lineTo(this.width, this.height / 2);
-    this.context.stroke();
-  }
-
-  private drawPhraseSpans(
-    phrases: TimelinePhrase[],
-    activePhraseId: string | null,
-    xStart: number,
-    xEnd: number,
-    startSeconds: number,
-    endSeconds: number
-  ): void {
-    const duration = Math.max(0.001, endSeconds - startSeconds);
-    phrases.forEach((phrase, index) => {
-      const left = xStart + clamp((phrase.startSeconds - startSeconds) / duration, 0, 1) * (xEnd - xStart);
-      const right = xStart + clamp((phrase.endSeconds - startSeconds) / duration, 0, 1) * (xEnd - xStart);
-      const width = Math.max(0, right - left);
-      if (width <= 0) {
-        return;
-      }
-      const active = phrase.phraseId === activePhraseId;
-      this.context.fillStyle = active ? "rgba(217, 255, 0, 0.24)" : phraseFill(index);
-      this.context.fillRect(left, 0, width, this.height);
-      if (active) {
-        this.context.strokeStyle = "rgba(217, 255, 0, 0.85)";
-        this.context.strokeRect(left + 0.5, 0.5, Math.max(1, width - 1), this.height - 1);
-      }
-      if (width > 56) {
-        this.context.fillStyle = active ? "#f8fafc" : "rgba(226, 232, 240, 0.74)";
-        this.context.font = "11px Inter, sans-serif";
-        this.context.fillText(phrase.name, left + 6, 16, width - 10);
-      }
-    });
-  }
-
-  private drawBeatGrid(
-    xStart: number,
-    xEnd: number,
-    startSeconds: number,
-    endSeconds: number,
-    bpm: number,
-    grid?: BeatGrid
-  ): void {
-    if (!grid && (!Number.isFinite(bpm) || bpm <= 0)) {
-      return;
-    }
-    const secondsPerBeat = 60 / bpm;
-    const beatsPerBar = grid ? grid.beatsPerBar : 4;
-    const duration = Math.max(0.001, endSeconds - startSeconds);
-    const firstBeat = grid
-      ? Math.ceil(secondsToBeats(grid, startSeconds))
-      : Math.ceil(startSeconds / secondsPerBeat);
-    const lastBeat = grid
-      ? Math.floor(secondsToBeats(grid, endSeconds))
-      : Math.floor(endSeconds / secondsPerBeat);
-    for (let beat = firstBeat; beat <= lastBeat; beat += 1) {
-      const seconds = grid ? beatsToSeconds(grid, beat) : beat * secondsPerBeat;
-      if (seconds < startSeconds) {
+    const bands: TimelineBand[] = [];
+    for (const phrase of input.phrases) {
+      const left = clamp(phrase.startSeconds / duration, 0, 1) * this.cssWidth;
+      const right = clamp(phrase.endSeconds / duration, 0, 1) * this.cssWidth;
+      if (right - left < 0.5) {
         continue;
       }
-      const x = xStart + ((seconds - startSeconds) / duration) * (xEnd - xStart);
-      const isBar = beat % beatsPerBar === 0;
-      const isPhraseBeat = beat % (beatsPerBar * 8) === 0;
-      this.context.strokeStyle = isPhraseBeat
-        ? "rgba(248, 250, 252, 0.34)"
-        : isBar
-          ? "rgba(148, 163, 184, 0.24)"
-          : "rgba(148, 163, 184, 0.12)";
-      this.context.lineWidth = isPhraseBeat ? 1.5 : 1;
-      this.context.beginPath();
-      this.context.moveTo(x, isPhraseBeat ? 0 : this.height * 0.18);
-      this.context.lineTo(x, this.height);
-      this.context.stroke();
+      bands.push({
+        phrase,
+        left,
+        width: right - left,
+        active: phrase.phraseId === input.activePhraseId
+      });
+    }
+    return bands;
+  }
+
+  private drawPhraseBands(bands: TimelineBand[]): void {
+    const height = this.cssHeight;
+    for (const band of bands) {
+      const rgb = PHRASE_COLORS[band.phrase.kind];
+      this.context.fillStyle = `rgba(${rgb}, ${band.active ? 0.2 : 0.09})`;
+      this.context.fillRect(band.left, 0, band.width, height);
+    }
+    // Quiet seams so adjacent phrases read as separate spans.
+    this.context.fillStyle = "rgba(5, 8, 12, 0.6)";
+    for (let index = 1; index < bands.length; index += 1) {
+      this.context.fillRect(Math.round(bands[index].left) - 0.5, 0, 1, height);
     }
   }
 
-  private drawPeaks(peaks: number[], xStart: number, xEnd: number, color: string): void {
-    if (!peaks.length) {
-      return;
+  private envelopePath(input: AudioTimelineInput): Path2D {
+    const cached = this.envelope;
+    if (cached && cached.peaks === input.peaks && cached.width === this.cssWidth && cached.height === this.cssHeight) {
+      return cached.path;
     }
-    const centerY = this.height * 0.56;
-    const maxAmplitude = this.height * 0.34;
-    const width = xEnd - xStart;
-    this.context.strokeStyle = color;
-    this.context.lineWidth = 1;
-    this.context.beginPath();
-    peaks.forEach((peak, index) => {
-      const x = xStart + (index / Math.max(1, peaks.length - 1)) * width;
-      const amplitude = clamp(peak, 0, 1) * maxAmplitude;
-      this.context.moveTo(x, centerY - amplitude);
-      this.context.lineTo(x, centerY + amplitude);
-    });
-    this.context.stroke();
-  }
-
-  private drawLiveSamples(samples: TimelineSample[], markerX: number, startSeconds: number, endSeconds: number): void {
-    const visible = samples.filter((sample) => sample.seconds >= startSeconds && sample.seconds <= endSeconds);
-    if (!visible.length) {
-      return;
-    }
-    const duration = Math.max(0.001, endSeconds - startSeconds);
-    const centerY = this.height * 0.56;
-    const maxAmplitude = this.height * 0.34;
-    this.context.strokeStyle = "rgba(125, 211, 252, 0.82)";
-    this.context.lineWidth = 2;
-    this.context.beginPath();
-    visible.forEach((sample, index) => {
-      const x = clamp((sample.seconds - startSeconds) / duration, 0, 1) * markerX;
-      const y = centerY - clamp(sample.level, 0, 1) * maxAmplitude;
+    const width = this.cssWidth;
+    const centerY = this.cssHeight * 0.62;
+    const maxAmplitude = this.cssHeight * 0.3;
+    const count = input.peaks.length;
+    const path = new Path2D();
+    for (let index = 0; index < count; index += 1) {
+      const x = (index / Math.max(1, count - 1)) * width;
+      const y = centerY - clamp(input.peaks[index], 0, 1) * maxAmplitude;
       if (index === 0) {
-        this.context.moveTo(x, y);
+        path.moveTo(x, y);
       } else {
-        this.context.lineTo(x, y);
+        path.lineTo(x, y);
       }
-    });
-    this.context.stroke();
+    }
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const x = (index / Math.max(1, count - 1)) * width;
+      path.lineTo(x, centerY + clamp(input.peaks[index], 0, 1) * maxAmplitude);
+    }
+    path.closePath();
+    this.envelope = { peaks: input.peaks, width, height: this.cssHeight, path };
+    return path;
   }
 
-  private drawMarker(x: number, label: string): void {
-    this.context.strokeStyle = "#f8fafc";
-    this.context.lineWidth = 2;
+  private drawWaveform(input: AudioTimelineInput): void {
+    if (!input.peaks.length) {
+      return;
+    }
+    const path = this.envelopePath(input);
+    const playheadX = clamp(input.currentSeconds / Math.max(0.001, input.durationSeconds), 0, 1) * this.cssWidth;
+    // What has played dims back; what is coming stays bright.
+    this.context.fillStyle = "rgba(226, 232, 240, 0.26)";
+    this.context.save();
     this.context.beginPath();
-    this.context.moveTo(x, 0);
-    this.context.lineTo(x, this.height);
-    this.context.stroke();
-    this.context.fillStyle = "#f8fafc";
-    this.context.font = "11px Inter, sans-serif";
-    this.context.fillText(label, Math.min(this.width - 96, x + 7), this.height - 9);
+    this.context.rect(0, 0, playheadX, this.cssHeight);
+    this.context.clip();
+    this.context.fill(path);
+    this.context.restore();
+    this.context.fillStyle = "rgba(226, 232, 240, 0.52)";
+    this.context.save();
+    this.context.beginPath();
+    this.context.rect(playheadX, 0, this.cssWidth - playheadX, this.cssHeight);
+    this.context.clip();
+    this.context.fill(path);
+    this.context.restore();
   }
+
+  private drawPhraseLabels(bands: TimelineBand[]): void {
+    const context = this.context;
+    context.font = "600 10px Inter, ui-sans-serif, system-ui, sans-serif";
+    context.textBaseline = "middle";
+    const chipHeight = 15;
+    const chipTop = 5;
+    const margin = 5;
+    for (const band of bands) {
+      const available = band.width - margin * 2;
+      if (available <= 0) {
+        continue;
+      }
+      const text = timelineLabelText(band.phrase).toUpperCase();
+      const label = fitTimelineLabel(text, available, (candidate) => context.measureText(candidate).width);
+      if (!label) {
+        continue;
+      }
+      const chipWidth = Math.min(available, context.measureText(label).width + 10);
+      const rgb = PHRASE_COLORS[band.phrase.kind];
+      context.fillStyle = `rgba(${rgb}, ${band.active ? 0.32 : 0.16})`;
+      context.beginPath();
+      context.roundRect(band.left + margin, chipTop, chipWidth, chipHeight, 4);
+      context.fill();
+      context.fillStyle = `rgba(${rgb}, ${band.active ? 0.95 : 0.72})`;
+      context.fillText(label, band.left + margin + 5, chipTop + chipHeight / 2 + 0.5);
+    }
+  }
+
+  private drawPlayhead(input: AudioTimelineInput): void {
+    const x = Math.round(clamp(input.currentSeconds / Math.max(0.001, input.durationSeconds), 0, 1) * this.cssWidth);
+    this.context.fillStyle = "rgba(248, 250, 252, 0.9)";
+    this.context.fillRect(x - 0.5, 0, 1, this.cssHeight);
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 export async function loadWaveformPeaks(url: string, bucketCount = 1400): Promise<number[]> {
@@ -266,29 +330,6 @@ function buildPeaks(audio: AudioBuffer, bucketCount: number): number[] {
     }
     return peak;
   });
-}
-
-function phraseFill(index: number): string {
-  const colors = [
-    "rgba(14, 165, 233, 0.14)",
-    "rgba(168, 85, 247, 0.14)",
-    "rgba(245, 158, 11, 0.14)",
-    "rgba(34, 197, 94, 0.14)"
-  ];
-  return colors[index % colors.length];
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds)) {
-    return "0:00";
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remaining = Math.floor(seconds % 60).toString().padStart(2, "0");
-  return `${minutes}:${remaining}`;
 }
 
 declare global {
