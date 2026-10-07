@@ -177,6 +177,16 @@ export const SHELL_TEMPLATE = /* html */ `
         </section>
 
         <section data-panel="output" hidden>
+          <div class="panel-group">
+            <label class="field-row">
+              <span>Display latency <strong id="displayLatencyValue">0</strong> ms</span>
+              <input id="displayLatency" type="number" min="0" max="2500" step="5" value="0" />
+            </label>
+            <p class="hint">
+              Raise until visuals land on the beat on the TV. Inactive in
+              live-mic mode, which has no clock to predict from.
+            </p>
+          </div>
           <div id="laserRoot"></div>
         </section>
       </div>

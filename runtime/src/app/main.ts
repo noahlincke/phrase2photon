@@ -2,6 +2,7 @@ import "./styles.css";
 
 import { AudioAnalyser } from "./audioAnalyser.js";
 import { AudioTimeline, loadWaveformPeaks, type TimelinePhrase } from "./audioTimeline.js";
+import { DISPLAY_LATENCY_KEY, displayPlaybackSeconds, parseDisplayLatencyMs } from "./displayLatency.js";
 import { escapeHtml, formatTime } from "./html.js";
 import { LaserConsole } from "./laserConsole.js";
 import { buildLiveShow, livePhraseFor } from "./liveShow.js";
@@ -163,7 +164,10 @@ const ui = {
   renderScale: required<HTMLInputElement>("renderScale"),
   renderScaleValue: required<HTMLElement>("renderScaleValue"),
 
-  laserRoot: required<HTMLDivElement>("laserRoot")
+  laserRoot: required<HTMLDivElement>("laserRoot"),
+
+  displayLatency: required<HTMLInputElement>("displayLatency"),
+  displayLatencyValue: required<HTMLElement>("displayLatencyValue")
 };
 
 const visuals = new VisualSystem(ui.canvas);
@@ -275,6 +279,20 @@ const laser = new LaserConsole(ui.laserRoot, {
   activeAdvancingPhraseId,
   setFavouriteCues: setLaserFavourites
 });
+
+ui.displayLatency.value = String(parseDisplayLatencyMs(localStorage.getItem(DISPLAY_LATENCY_KEY)));
+ui.displayLatencyValue.textContent = ui.displayLatency.value;
+ui.displayLatency.addEventListener("change", () => {
+  const value = parseDisplayLatencyMs(ui.displayLatency.value);
+  ui.displayLatency.value = String(value);
+  ui.displayLatencyValue.textContent = String(value);
+  localStorage.setItem(DISPLAY_LATENCY_KEY, String(value));
+});
+
+/** Operator-tuned display latency for the graphics lane, in ms. */
+function displayLatencyMs(): number {
+  return parseDisplayLatencyMs(ui.displayLatency.value);
+}
 
 // ---------------------------------------------------------------- dock
 
@@ -829,12 +847,15 @@ function showMusicalFrame(): MusicalContext | null {
     return idleFrame("Waiting for playback.");
   }
   const grid = gridFor(loaded.show);
-  const playback = playbackStateAt(schedule, seconds, grid);
+  // The TV or cast tab shows this frame late, so evaluate the show ahead by
+  // the display offset; live mic never reaches here and gets no prediction.
+  const secondsEff = displayPlaybackSeconds(seconds, displayLatencyMs());
+  const playback = playbackStateAt(schedule, secondsEff, grid);
   const phrase = playback.active.phrase;
   const bands = fileAnalyser.snapshot();
   // Lead-in before the first downbeat clamps to beat 0, mirroring the Python
   // beat-grid twin; a negative beat hands the visuals a barInPhrase of -1.
-  const beat = Math.max(0, secondsToBeats(grid, seconds));
+  const beat = Math.max(0, secondsToBeats(grid, secondsEff));
 
   if (phrase.phrase_id !== lastPhraseId) {
     notePhraseChange(phrase.phrase_id, performance.now());
