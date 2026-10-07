@@ -59,6 +59,17 @@ export function phrase2PhotonLibraryPlugin(): Plugin {
             return;
           }
 
+          if (req.method === "GET" && url.pathname === "/api/dmx/laser-off-grid") {
+            sendJson(res, await readLaserOffGrid());
+            return;
+          }
+
+          if (req.method === "PUT" && url.pathname === "/api/dmx/laser-off-grid") {
+            const path = await writeLaserOffGrid(req);
+            sendJson(res, { ok: true, path });
+            return;
+          }
+
           if (req.method === "GET" && url.pathname === "/api/rekordbox/mixer") {
             sendJson(res, await probeRekordboxMixerSnapshot());
             return;
@@ -495,6 +506,30 @@ async function readLaserFavourites(): Promise<unknown> {
 async function writeLaserFavourites(req: IncomingMessage): Promise<string> {
   const parsed = JSON.parse(await readRequestBody(req)) as unknown;
   const path = laserFavouritesPath();
+  await mkdir(join(homedir(), "Phrase2PhotonShows"), { recursive: true });
+  const temp = `${path}.${process.pid}.tmp`;
+  await writeFile(temp, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  await rename(temp, path);
+  return path;
+}
+
+const EMPTY_LASER_OFF_GRID = { version: 1, cues: [] as string[] };
+
+function laserOffGridPath(): string {
+  return join(homedir(), "Phrase2PhotonShows", "laser-off-grid.json");
+}
+
+async function readLaserOffGrid(): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(laserOffGridPath(), "utf8"));
+  } catch {
+    return EMPTY_LASER_OFF_GRID;
+  }
+}
+
+async function writeLaserOffGrid(req: IncomingMessage): Promise<string> {
+  const parsed = JSON.parse(await readRequestBody(req)) as unknown;
+  const path = laserOffGridPath();
   await mkdir(join(homedir(), "Phrase2PhotonShows"), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   await writeFile(temp, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");

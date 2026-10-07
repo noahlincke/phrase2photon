@@ -35,6 +35,7 @@ import {
   type Fb4Dmx16Frame
 } from "../dmx/fb4Dmx16.js";
 import { applyLaserLook, latencyShiftedBeats, phraseKindFor, type LaserLookContext } from "../dmx/laserLooks.js";
+import type { CueResyncTick } from "../dmx/cueResync.js";
 import type { PublicLibraryTrack } from "../library/types.js";
 import { fetchNowPlayingClock, fetchNowPlayingStatus } from "../nowPlaying/client.js";
 import {
@@ -273,11 +274,22 @@ function setLaserFavourites(favourites: Fb4CueFavouritePools): void {
   laserFavourites = favourites;
 }
 
+/**
+ * Cue keys ("page:cue") flagged off-grid in the console. Off-grid cues are
+ * skipped by the automatic selector in the four-on-the-floor lanes only.
+ */
+let laserOffGrid: string[] = [];
+
+function setLaserOffGridCues(cues: string[]): void {
+  laserOffGrid = cues;
+}
+
 const laser = new LaserConsole(ui.laserRoot, {
   currentBpm,
   currentShowFrame,
   activeAdvancingPhraseId,
-  setFavouriteCues: setLaserFavourites
+  setFavouriteCues: setLaserFavourites,
+  setOffGridCues: setLaserOffGridCues
 });
 
 ui.displayLatency.value = String(parseDisplayLatencyMs(localStorage.getItem(DISPLAY_LATENCY_KEY)));
@@ -1007,7 +1019,7 @@ function updateHud(context: MusicalContext): void {
   if (loaded && context.phraseId && !liveMicDrives()) {
     const published = showLaserFrame();
     if (published) {
-      laser.publishShowFrame(published.phraseId, published.frame, performance.now());
+      laser.publishShowFrame(published.phraseId, published.frame, performance.now(), published.resync);
     }
   }
 }
@@ -1056,6 +1068,8 @@ function buildShowLaserFrame(show: ShowPackage, phrase: Phrase, phraseProgress: 
     allowExperimental39Channel: laser.experimental39Enabled,
     phraseProgress,
     bpm,
+    phraseKind: phraseKindFor(phrase),
+    offGridCues: laserOffGrid,
     favouriteCues: laserFavourites
   });
 }
@@ -1093,6 +1107,8 @@ function publishLiveLaserFrame(liveState: LiveMusicalState, state: LiveMusicalSt
       phraseProgress: state.phrasePhase,
       paletteOverride: lastMicPaletteId ?? undefined,
       cueSelection: { mode: "variety", rotationOrdinal: Math.max(0, state.phrase.startBar) },
+      phraseKind: state.phrase.kind,
+      offGridCues: laserOffGrid,
       favouriteCues: laserFavourites
     }),
     {
@@ -1108,13 +1124,17 @@ function publishLiveLaserFrame(liveState: LiveMusicalState, state: LiveMusicalSt
       dimmerFades: laser.dimmerFadesEnabled
     }
   );
-  laser.publishShowFrame(phraseKey, frame, performance.now());
+  laser.publishShowFrame(phraseKey, frame, performance.now(), {
+    positionBeats: relativeBeats,
+    beatsPerBar: 4,
+    bpm: state.bpm
+  });
 }
 
 function publishLaserForPhrase(): void {
   const published = showLaserFrame();
   if (published) {
-    laser.publishShowFrame(published.phraseId, published.frame, performance.now());
+    laser.publishShowFrame(published.phraseId, published.frame, performance.now(), published.resync);
   }
 }
 
@@ -1125,7 +1145,7 @@ function publishLaserForPhrase(): void {
  * compensation, so phrase changes and beat-timed events leave the browser
  * early enough to land on the downbeat after the output path's delay.
  */
-function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
+function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame; resync: CueResyncTick } | null {
   if (!loaded || !schedule.length) {
     return null;
   }
@@ -1138,13 +1158,9 @@ function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
   const playback = playbackStateAt(schedule, secondsEff, grid);
   const beatFloat = Math.max(0, secondsToBeats(grid, secondsEff));
   const next = schedule[schedule.indexOf(playback.active) + 1];
+  const bpm = deckCueBpm(loadedSourceKind, nowPlayingClockBpm, tempoAt(grid, secondsEff));
   const frame = withLaserLook(
-    buildShowLaserFrame(
-      loaded.show,
-      playback.active.phrase,
-      playback.phraseProgress,
-      deckCueBpm(loadedSourceKind, nowPlayingClockBpm, tempoAt(grid, secondsEff))
-    ),
+    buildShowLaserFrame(loaded.show, playback.active.phrase, playback.phraseProgress, bpm),
     {
       phraseKind: phraseKindFor(playback.active.phrase),
       nextPhraseKind: next ? phraseKindFor(next.phrase) : null,
@@ -1158,7 +1174,11 @@ function showLaserFrame(): { phraseId: string; frame: Fb4Dmx16Frame } | null {
       dimmerFades: laser.dimmerFadesEnabled
     }
   );
-  return { phraseId: playback.active.phrase.phrase_id, frame };
+  return {
+    phraseId: playback.active.phrase.phrase_id,
+    frame,
+    resync: { positionBeats: beatFloat, beatsPerBar: grid.beatsPerBar, bpm }
+  };
 }
 
 /** Applies the beat looks unless the operator turned them off. */

@@ -1,4 +1,5 @@
 import type { DmxLaserCue, LightingCue, Phrase, ShowPackage } from "../show/types.js";
+import type { PhraseKind } from "../audio/structure.js";
 import { describeFb4Cue, fb4CueCatalog } from "./fb4CueCatalog.js";
 
 export interface Fb4Dmx16Input {
@@ -14,6 +15,10 @@ export interface Fb4Dmx16Input {
   paletteOverride?: string;
   /** Current tempo on the show's grid; defaults to the show's headline tempo. */
   bpm?: number;
+  /** Phrase kind of the current phrase, when the caller already knows it. */
+  phraseKind?: PhraseKind;
+  /** Cue keys ("page:cue") flagged off-grid; excluded from automatic drop/groove picks. */
+  offGridCues?: string[];
 }
 
 export interface Fb4Dmx16Frame {
@@ -316,10 +321,24 @@ export function fb4CueRequires39Channel(pageNumber: number, cueNumber: number): 
 
 export function resolveFb4LegacyCueTarget(input: Fb4Dmx16Input): Fb4CueTarget {
   const poolId = legacyCueProfileForPhrase(input.phrase);
-  const favourites = favouriteCuePoolForProfile(poolId, input.favouriteCues);
+  // Off-grid cues free-run with movement that never lands on a beat division,
+  // which distracts in the four-on-the-floor lanes. They stay available to
+  // intro, breakdown and outro phrases and to explicit show cues.
+  const offGrid =
+    input.phraseKind === "drop" || input.phraseKind === "groove"
+      ? new Set(input.offGridCues ?? [])
+      : null;
+  const onGrid = (entries: typeof fb4CueCatalog): typeof fb4CueCatalog =>
+    offGrid ? entries.filter((entry) => !offGrid.has(`${entry.page}:${entry.cue}`)) : entries;
+
+  const favourites = onGrid(favouriteCuePoolForProfile(poolId, input.favouriteCues));
+  const defaultPool = legacyCuePoolForProfile(poolId);
+  const defaultOnGrid = onGrid(defaultPool);
   const pool = favourites.length >= FB4_FAVOURITE_POOL_MINIMUM
     ? favourites
-    : legacyCuePoolForProfile(poolId);
+    : defaultOnGrid.length
+      ? defaultOnGrid
+      : defaultPool;
   const selection = input.cueSelection ?? { mode: "deterministic" as const };
   if (selection.mode === "variety") {
     const groups = groupLegacyCuePoolByPage(pool);

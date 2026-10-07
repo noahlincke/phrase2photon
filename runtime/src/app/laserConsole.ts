@@ -20,6 +20,7 @@ import {
   type Fb4Dmx16Frame
 } from "../dmx/fb4Dmx16.js";
 import { applyRekordboxLineFaderMute } from "../dmx/rekordboxGate.js";
+import { CueResyncTracker, type CueResyncTick } from "../dmx/cueResync.js";
 import { escapeHtml } from "./html.js";
 
 /**
@@ -44,6 +45,8 @@ export interface LaserConsoleDeps {
   activeAdvancingPhraseId(): string | null;
   /** Replaces the favourite pools the automatic cue selector reads. */
   setFavouriteCues(favourites: Fb4CueFavouritePools): void;
+  /** Replaces the off-grid cue keys the automatic cue selector skips. */
+  setOffGridCues(cues: string[]): void;
 }
 
 const FAVOURITE_POOLS: { id: Fb4CuePoolId; label: string }[] = [
@@ -71,6 +74,8 @@ const STORAGE = {
   beatLooks: "p2p.dmx.beatLooks",
   dimmerFades: "p2p.dmx.dimmerFades",
   latencyMs: "p2p.dmx.latencyMs",
+  cueResync: "p2p.dmx.cueResync",
+  cueResyncPeriod: "p2p.dmx.cueResyncPeriod",
   geometryOverride: "p2p.dmx.geometryOverride",
   rekordboxMute: "p2p.dmx.rekordboxLineFaderMute",
   holdForever: "p2p.dmx.debugHoldForever",
@@ -100,8 +105,10 @@ export class LaserConsole {
 
   private catalogOverrides: Record<string, Fb4CueCatalogOverride>;
   private favourites: Fb4CueFavouritePools = {};
+  private offGrid: string[] = [];
   private calibration: LaserColorSlot[];
   private selectedPage: number;
+  private resync = new CueResyncTracker();
 
   private lastBaseFrame: Fb4Dmx16Frame | null = null;
   private lastSource: FrameSource | null = null;
@@ -143,6 +150,7 @@ export class LaserConsole {
     this.renderCatalog();
     this.startMixerPolling();
     void this.loadFavourites();
+    void this.loadOffGrid();
   }
 
   private input(name: string): HTMLInputElement {
@@ -165,6 +173,8 @@ export class LaserConsole {
     this.input("dimmerFades").checked = localStorage.getItem(STORAGE.dimmerFades) !== "false";
     this.input("latencyMs").value = localStorage.getItem(STORAGE.latencyMs) || "0";
     this.element.latencyValue.textContent = this.input("latencyMs").value;
+    this.input("cueResync").checked = localStorage.getItem(STORAGE.cueResync) === "true";
+    this.select("cueResyncPeriod").value = localStorage.getItem(STORAGE.cueResyncPeriod) || "1";
     this.input("rekordboxMute").checked = localStorage.getItem(STORAGE.rekordboxMute) === "true";
     this.input("brightnessOn").checked = localStorage.getItem(STORAGE.brightnessOn) !== "false";
     this.input("geometryOverride").checked = localStorage.getItem(STORAGE.geometryOverride) === "true";
@@ -226,6 +236,11 @@ export class LaserConsole {
     persistToggle("geometryOverride", STORAGE.geometryOverride);
     persistToggle("rekordboxMute", STORAGE.rekordboxMute);
     persistToggle("holdForever", STORAGE.holdForever);
+    persistToggle("cueResync", STORAGE.cueResync);
+
+    this.select("cueResyncPeriod").addEventListener("change", () => {
+      localStorage.setItem(STORAGE.cueResyncPeriod, this.select("cueResyncPeriod").value);
+    });
 
     this.input("latencyMs").addEventListener("change", () => {
       localStorage.setItem(STORAGE.latencyMs, this.input("latencyMs").value);
@@ -328,6 +343,16 @@ export class LaserConsole {
     return Number.parseInt(this.input("latencyMs").value, 10) || 0;
   }
 
+  /** Whether show frames restart the current cue on each period downbeat. */
+  get cueResyncEnabled(): boolean {
+    return this.input("cueResync").checked;
+  }
+
+  /** How many bars between cue restarts: every bar, or every four. */
+  get cueResyncPeriodBars(): number {
+    return this.select("cueResyncPeriod").value === "4" ? 4 : 1;
+  }
+
   /**
    * How much of the catalogue the current addressing mode can actually select.
    *
@@ -356,18 +381,27 @@ export class LaserConsole {
   /**
    * Publishes a show frame, respecting any cue the operator has pinned to the
    * current phrase and any debug hold in effect.
+   *
+   * The optional re-sync tick carries the latency-shifted beat position; when
+   * the option is on, the first show frame of each period goes out as a
+   * one-frame cue restart so the FB4's animation phase lands on the bar.
    */
-  publishShowFrame(phraseId: string, frame: Fb4Dmx16Frame, nowMs: number): void {
+  publishShowFrame(phraseId: string, frame: Fb4Dmx16Frame, nowMs: number, resync?: CueResyncTick): void {
     // 40 fps: beat looks chop the dimmer on sixteenth notes, which at show
     // tempos needs well under the old ~8 fps ceiling to stay on the beat.
     if (this.sequenceRunning || nowMs < this.overlayHoldUntil || nowMs - this.lastSentAt <= 25) {
       return;
     }
     this.lastSentAt = nowMs;
-    const pinned =
+    let pinned =
       this.persistentOverride && this.persistentOverride.phraseId === phraseId
         ? this.persistentOverride.frame
         : frame;
+    if (resync) {
+      pinned =
+        this.resync.restart(pinned, resync, this.cueResyncPeriodBars, this.input("cueResync").checked) ??
+        pinned;
+    }
     void this.publish(pinned, "show");
   }
 
@@ -863,6 +897,13 @@ export class LaserConsole {
       chip.addEventListener("click", () => this.toggleFavourite(pool.id, key));
       chips.append(chip);
     }
+    const offGrid = document.createElement("button");
+    offGrid.type = "button";
+    offGrid.className = this.offGrid.includes(key) ? "chip active" : "chip";
+    offGrid.textContent = "Ø";
+    offGrid.title = "off-grid: never auto-picked for drop/groove phrases";
+    offGrid.addEventListener("click", () => this.toggleOffGrid(key));
+    chips.append(offGrid);
     return chips;
   }
 
@@ -906,6 +947,44 @@ export class LaserConsole {
       }
     } catch {
       this.setStatus("Favourite save failed: output service reconnecting.");
+    }
+  }
+
+  private toggleOffGrid(key: string): void {
+    this.offGrid = this.offGrid.includes(key)
+      ? this.offGrid.filter((item) => item !== key)
+      : [...this.offGrid, key];
+    this.deps.setOffGridCues(this.offGrid);
+    this.renderCatalog();
+    void this.saveOffGrid();
+  }
+
+  private async loadOffGrid(): Promise<void> {
+    try {
+      const response = await fetch("/api/dmx/laser-off-grid");
+      const payload = await response.json() as { cues?: string[] };
+      this.offGrid = payload.cues ?? [];
+      this.deps.setOffGridCues(this.offGrid);
+      this.renderCatalog();
+    } catch {
+      this.setStatus("Off-grid flags unavailable.");
+    }
+  }
+
+  private async saveOffGrid(): Promise<void> {
+    const body = JSON.stringify({ version: 1, cues: [...this.offGrid].sort() });
+    try {
+      const response = await fetch("/api/dmx/laser-off-grid", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body
+      });
+      const result = (await response.json()) as { ok: boolean; error?: string };
+      if (!result.ok) {
+        this.setStatus(`Off-grid save failed: ${result.error ?? "unknown"}`);
+      }
+    } catch {
+      this.setStatus("Off-grid save failed: output service reconnecting.");
     }
   }
 
@@ -1160,6 +1239,17 @@ const TEMPLATE = /* html */ `
     <label class="field-row">
       <span>Output latency <strong data-laser="latencyValue">0</strong> ms</span>
       <input data-laser="latencyMs" type="number" min="0" max="500" step="5" value="0" />
+    </label>
+    <label class="toggle-row">
+      <input data-laser="cueResync" type="checkbox" />
+      <span>Re-sync animated cues</span>
+    </label>
+    <label class="field-row">
+      <span>Re-sync period</span>
+      <select data-laser="cueResyncPeriod">
+        <option value="1">Every bar</option>
+        <option value="4">Every 4 bars</option>
+      </select>
     </label>
     <div data-laser="channels" class="dmx-channels"></div>
   </details>

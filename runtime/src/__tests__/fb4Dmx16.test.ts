@@ -725,6 +725,78 @@ describe("FB4 cross-profile ch1 guard", () => {
   });
 });
 
+describe("off-grid cue selection", () => {
+  const dropInput = {
+    show,
+    phrase: show.phrases[1],
+    lightingCue: null,
+    phraseProgress: 0
+  };
+
+  it("never picks an off-grid cue for a drop phrase", () => {
+    const base = resolveFb4LegacyCueTarget(dropInput);
+    const flagged = resolveFb4LegacyCueTarget({
+      ...dropInput,
+      phraseKind: "drop",
+      offGridCues: [`${base.page}:${base.cue}`]
+    });
+
+    expect(`${flagged.page}:${flagged.cue}`).not.toBe(`${base.page}:${base.cue}`);
+  });
+
+  it("never picks an off-grid cue for a groove phrase", () => {
+    const base = resolveFb4LegacyCueTarget(dropInput);
+    const flagged = resolveFb4LegacyCueTarget({
+      ...dropInput,
+      phraseKind: "groove",
+      offGridCues: [`${base.page}:${base.cue}`]
+    });
+
+    expect(`${flagged.page}:${flagged.cue}`).not.toBe(`${base.page}:${base.cue}`);
+  });
+
+  it("keeps off-grid cues available outside the four-on-the-floor lanes", () => {
+    const base = resolveFb4LegacyCueTarget(dropInput);
+    for (const kind of ["intro", "breakdown", "outro"] as const) {
+      const flagged = resolveFb4LegacyCueTarget({
+        ...dropInput,
+        phraseKind: kind,
+        offGridCues: [`${base.page}:${base.cue}`]
+      });
+      expect(flagged).toEqual(base);
+    }
+  });
+
+  it("still picks something when every default cue is flagged off-grid", () => {
+    const everyReachableCue = fb4CueCatalog
+      .filter((entry) => !fb4CueRequires39Channel(entry.page, entry.cue))
+      .map((entry) => `${entry.page}:${entry.cue}`);
+    const flagged = resolveFb4LegacyCueTarget({
+      ...dropInput,
+      phraseKind: "drop",
+      offGridCues: everyReachableCue
+    });
+
+    expect(fb4CueRequires39Channel(flagged.page, flagged.cue)).toBe(false);
+  });
+
+  it("drops favourited off-grid cues below the pool minimum and uses the default pool", () => {
+    const favourites = { impact: ["1:5", "1:9", "2:3", "6:12"] };
+    const withFavourites = resolveFb4LegacyCueTarget({ ...dropInput, phraseKind: "drop", favouriteCues: favourites });
+    // The favourited pool wins normally; flag all of it off-grid and the pick
+    // must come from the default pool instead.
+    expect([[1, 5], [1, 9], [2, 3], [6, 12]]).toContainEqual([withFavourites.page, withFavourites.cue]);
+    const flagged = resolveFb4LegacyCueTarget({
+      ...dropInput,
+      phraseKind: "drop",
+      favouriteCues: favourites,
+      offGridCues: ["1:5", "1:9", "2:3", "6:12"]
+    });
+
+    expect([[1, 5], [1, 9], [2, 3], [6, 12]]).not.toContainEqual([flagged.page, flagged.cue]);
+  });
+});
+
 function phraseVariant(
   slug: string,
   name: string,
