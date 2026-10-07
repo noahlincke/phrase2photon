@@ -8,7 +8,9 @@ import {
   buildFb4CueControlFrame,
   buildFb4CueFrame,
   buildFb4Dmx16Frame,
+  buildFb4FadeOverlayFrame,
   buildFb4ZoneFrame,
+  type Fb4Dmx16Frame,
   cueIndexValue,
   cueSpeedByte16,
   fb4CueRequires39Channel,
@@ -79,7 +81,7 @@ describe("FB4 DMX16 mapping", () => {
     });
 
     expect(frame.channels).toHaveLength(16);
-    expect(frame.channels[0]).toBe(240);
+    expect(frame.channels[0]).toBe(251);
     expect([3, 4, 5, 7, 8, 9]).toContain(frame.page);
     expect(frame.page).toBe(target.page);
     expect(frame.cue).toBe(target.cue);
@@ -622,6 +624,83 @@ describe("FB4 spec conformance (Pangolin wiki)", () => {
     expect(frame.channels[13]).toBe(128);
     // ch15 Color scroll: 225-255 = white.
     expect(frame.channels[14]).toBe(240);
+  });
+});
+
+describe("FB4 cross-profile ch1 guard", () => {
+  // 240 latches FB4 39-ch setup mode when held >=2 s, letting ch2 store Max
+  // Intensity 0 (Master Brightness 0, black in both profiles). 251 is the
+  // "Sixteen channels" band (225-255) in the 16-ch profile AND Playback in the
+  // 39-ch profile, so every frame is harmless under either menu profile.
+  // https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx16
+  const noBuilderEmitsSetupChannel1 = (frame: { profile: string; channels: number[] }, origin: string) => {
+    if (frame.channels[0] === 240) {
+      throw new Error(`${origin} emitted ch1=240 (39-ch setup mode)`);
+    }
+  };
+
+  it("never emits ch1=240 from any builder or overlay", () => {
+    const frames: Fb4Dmx16Frame[] = [
+      buildFb4Dmx16Frame({ show, phrase: show.phrases[0], lightingCue: null, phraseProgress: 0 }),
+      buildFb4Dmx16Frame({ show, phrase: show.phrases[1], lightingCue: show.lighting_cues[0], phraseProgress: 0.5 }),
+      buildFb4CueControlFrame("blackout"),
+      buildFb4CueControlFrame("cue-1"),
+      buildFb4LegacyCueFrame(4),
+      buildFb4ZoneFrame(),
+      buildFb4CueFrame(4),
+      buildFb4FadeOverlayFrame(0),
+      buildFb4FadeOverlayFrame(255)
+    ];
+    for (const base of frames) {
+      noBuilderEmitsSetupChannel1(base, base.profile);
+      for (const overlaid of [buildFb4ColorModeFrame(base, "white"), buildFb4ColorModeFrame(base, "original"), buildFb4ColorScrollFrame(base, 118, "Cyan")]) {
+        noBuilderEmitsSetupChannel1(overlaid, `${base.profile}+overlay`);
+      }
+    }
+  });
+
+  it("keeps looks over the full phrase/beat grid clear of ch1=240", () => {
+    const kinds = ["intro", "build", "drop", "groove", "breakdown", "outro"] as const;
+    for (const kind of kinds) {
+      const phrase = show.phrases.find((entry) => entry.phrase_id === `phrase_${kind}`) ?? show.phrases[0];
+      for (const allow39 of [false, true]) {
+        const base = buildFb4Dmx16Frame({
+          show,
+          phrase,
+          lightingCue: null,
+          phraseProgress: 0.5,
+          allowExperimental39Channel: allow39,
+          laserCue: allow39
+            ? { cue_id: `cue_${kind}`, phrase_id: phrase.phrase_id, fixture_group: "laser_main", mode: "cue", parameter_overrides: { page: 1, cue: 60 } }
+            : null
+        });
+        for (let beatsIntoPhrase = 0; beatsIntoPhrase <= 32; beatsIntoPhrase += 0.5) {
+          const frame = applyLaserLook(base, {
+            phraseKind: kind,
+            nextPhraseKind: null,
+            beatsIntoPhrase,
+            beatsInPhrase: 32,
+            beatPhase: (beatsIntoPhrase % 1),
+            beatInBar: (Math.floor(beatsIntoPhrase) % 4) + 1,
+            beatsPerBar: 4,
+            dropHitBeats: null,
+            phraseOrdinal: 0,
+            dimmerFades: false
+          });
+          noBuilderEmitsSetupChannel1(frame, `look kind=${kind} profile=${frame.profile} beat=${beatsIntoPhrase}`);
+        }
+      }
+    }
+  });
+
+  it("reads 16-channel frames under the 39-ch profile as never-setup with harmless playback", () => {
+    for (const phrase of show.phrases) {
+      const frame = buildFb4Dmx16Frame({ show, phrase, lightingCue: null, phraseProgress: 0.5 });
+      expect(frame.profile).toBe("pangolin-fb4-dmx16");
+      // 39-ch read: 251 = Playback (never the 240 setup latch, never a
+      // 0-239 Blackout/Safe value that would darken a 39-ch show).
+      expect(frame.channels[0]).toBe(251);
+    }
   });
 });
 

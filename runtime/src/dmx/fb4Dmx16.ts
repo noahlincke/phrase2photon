@@ -109,7 +109,12 @@ export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
     cue: cueNumber,
     cueShape: cueDescription?.observedShape ?? null,
     channels: [
-      240,
+      // ch1 = 251: "Sixteen channels" band (225-255) in the 16-ch profile, and
+      // Playback in the 39-ch profile, so a frame stays harmless if the FB4
+      // menu is on the other profile. 240 here would latch 39-ch setup mode
+      // (hold >=2 s) and let ch2 store Max Intensity 0.
+      // https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx16
+      251,
       pageIndexValue(pageNumber),
       cueIndexValue(cueNumber),
       cueSpeedByte16(bpm),
@@ -376,7 +381,12 @@ export function cueSpeedByte16(bpm: number): number {
 
 function baseCueChannels(input: { bpm: number; pageNumber: number; cueNumber: number; dimmer: number; color: number }): number[] {
   return [
-    240,
+    // ch1 = 251: "Sixteen channels" band (225-255) in the 16-ch profile, and
+    // Playback in the 39-ch profile, so a frame stays harmless if the FB4
+    // menu is on the other profile. 240 here would latch 39-ch setup mode
+    // (hold >=2 s) and let ch2 store Max Intensity 0.
+    // https://wiki.pangolin.com/doku.php?id=hardware:fb4:dmx16
+    251,
     pageIndexValue(input.pageNumber),
     cueIndexValue(input.cueNumber),
     cueSpeedByte16(input.bpm),
