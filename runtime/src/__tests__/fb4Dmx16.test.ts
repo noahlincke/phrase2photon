@@ -89,7 +89,7 @@ describe("FB4 DMX16 mapping", () => {
     expect(frame.channels[2]).toBe(cueIndexValue(frame.cue));
     expect(frame.channels[3]).toBe(cueSpeedByte16(122));
     expect(frame.channels[4]).toBe(255);
-    expect(frame.channels[6]).toBeGreaterThanOrEqual(150);
+    expect(frame.channels[6]).toBeGreaterThanOrEqual(217);
     expect(frame.channels[6]).toBeLessThanOrEqual(255);
     expect(frame.cueShape).not.toBeNull();
     expect(frame.colorLabel).toBe("Yellow-Lime");
@@ -106,8 +106,8 @@ describe("FB4 DMX16 mapping", () => {
     });
 
     expect(frame.channels[4]).toBe(255);
-    expect(frame.channels[6]).toBeGreaterThan(150);
-    expect(frame.channels[6]).toBeLessThanOrEqual(200);
+    // Intro dynamics 0.2 sits at 70% + a fifth of the energy span.
+    expect(frame.channels[6]).toBe(225);
     expect(frame.channels[7]).toBe(frame.channels[6]);
     expect(frame.colorLabel).toBe("Cyan");
     expect(frame.graphicsColor).toBe("#7dd3fc");
@@ -499,10 +499,31 @@ describe("FB4 DMX16 mapping", () => {
     expect(frame.channels[4]).toBe(255);
     expect(frame.channels[6]).toBe(255);
     expect(frame.channels[7]).toBe(255);
+    expect(frame.channels[8]).toBe(0);
     expect(frame.channels[9]).toBe(128);
     expect(frame.channels[10]).toBe(128);
     expect(frame.channels[11]).toBe(255);
     expect(frame.channels[14]).toBe(240);
+  });
+
+  it("keeps every 16-channel builder upright and inside the size envelope", () => {
+    const frames = [
+      buildFb4Dmx16Frame({ show, phrase: show.phrases[0], lightingCue: null, phraseProgress: 0 }),
+      buildFb4Dmx16Frame({ show, phrase: show.phrases[0], lightingCue: null, phraseProgress: 0.5 }),
+      buildFb4Dmx16Frame({ show, phrase: show.phrases[1], lightingCue: show.lighting_cues[0], phraseProgress: 0.9 }),
+      buildFb4CueControlFrame("cue-1"),
+      buildFb4LegacyCueFrame(4),
+      buildFb4ZoneFrame()
+    ];
+    for (const frame of frames) {
+      expect(frame.profile).toBe("pangolin-fb4-dmx16");
+      // Angle Z neutral: 0 degrees upright, never the 180-degree 128.
+      expect(frame.channels[8]).toBe(0);
+      // Size X/Y: the 217-255 energy band, never the mirrored range below 128.
+      expect(frame.channels[6]).toBeGreaterThanOrEqual(217);
+      expect(frame.channels[6]).toBeLessThanOrEqual(255);
+      expect(frame.channels[7]).toBe(frame.channels[6]);
+    }
   });
 
   it("keeps the square test pattern at or beyond every look's geometry envelope", () => {

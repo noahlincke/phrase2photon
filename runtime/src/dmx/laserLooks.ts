@@ -182,8 +182,8 @@ function finalBuildBars(ctx: LaserLookContext, ramp: RampWindow): boolean {
   return ramp.beatsInRamp - ramp.beatsIntoRamp <= ctx.beatsPerBar * 2;
 }
 
-/** Sixty percent of full size at the start of the build, full size by the drop. */
-const BUILD_SIZE_FLOOR = Math.round(0.6 * 255);
+/** Seventy-five percent of full size at the start of the build, full size by the drop. */
+const BUILD_SIZE_FLOOR = 224;
 
 /** Forces the colour channels to white, the way the operator's White button does. */
 function whiteColour(frame: Fb4Dmx16Frame): Fb4Dmx16Frame {
@@ -225,27 +225,39 @@ function applyBreakdownDrift(
 ): Fb4Dmx16Frame {
   const progress = clamp01(ctx.beatsIntoPhrase / Math.max(ctx.beatsInPhrase, 1));
   const angle = Math.round(progress * 0.5 * 255);
-  const scale = allowShrink ? BREAKDOWN_SIZE_SCALE : 1;
-  const channels = [...frame.channels];
+  // Breakdowns sit smaller at 75-80% of full (224-230); the pre-drop ramp and
+  // the drop hit keep their own sizes.
+  const shrunk = allowShrink ? withSize(frame, breakdownSize(sizeOf(frame))) : frame;
+  const channels = [...shrunk.channels];
   if (frame.profile === "pangolin-fb4-dmx39") {
     writeByte16(channels, 23, angle);
-    writeByte16(channels, 19, Math.round((channels[19] ?? 0) * scale));
-    writeByte16(channels, 21, Math.round((channels[21] ?? 0) * scale));
   } else {
     channels[8] = angle;
-    channels[6] = clampByte(Math.round((channels[6] ?? 0) * scale));
-    channels[7] = clampByte(Math.round((channels[7] ?? 0) * scale));
   }
-  const shrunk: Fb4Dmx16Frame = { ...frame, channels };
+  const drifted: Fb4Dmx16Frame = { ...shrunk, channels };
   if (allowSwell && ctx.dimmerFades) {
     const breath = 0.5 + 0.5 * Math.sin(progress * Math.PI * 2 * SWELL_CYCLES_PER_PHRASE);
-    return withDimmer(shrunk, Math.round(FADE_FLOOR + (255 - FADE_FLOOR) * breath));
+    return withDimmer(drifted, Math.round(FADE_FLOOR + (255 - FADE_FLOOR) * breath));
   }
-  return shrunk;
+  return drifted;
 }
 
-/** Breakdowns sit at three quarters of their phrase size. */
-const BREAKDOWN_SIZE_SCALE = 0.75;
+/**
+ * Compresses the phrase's energy size (217-255) into the breakdown band
+ * (224-230). Multiplying the raw byte no longer shrinks: with 128 = 0% a
+ * 0.75 factor collapses sizes toward the mirror range below 128.
+ */
+function breakdownSize(base: number): number {
+  const energy = clamp01((base - ENERGY_SIZE_FLOOR) / (255 - ENERGY_SIZE_FLOOR));
+  return Math.round(BREAKDOWN_SIZE_FLOOR + energy * (BREAKDOWN_SIZE_CEIL - BREAKDOWN_SIZE_FLOOR));
+}
+
+/** Breakdowns sit between 75% and 80% of full size (bytes 224-230). */
+const BREAKDOWN_SIZE_FLOOR = 224;
+const BREAKDOWN_SIZE_CEIL = 230;
+
+/** The phrase frame's own size floor: 70% of full at zero energy. */
+const ENERGY_SIZE_FLOOR = 217;
 
 /** A breakdown breathes twice across its length. */
 const SWELL_CYCLES_PER_PHRASE = 2;

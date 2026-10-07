@@ -129,11 +129,11 @@ describe("laser looks", () => {
 
   it("ramps build size up and chops the dimmer faster toward the drop", () => {
     const start = looked("build", { beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1 });
-    expect(start.channels[6]).toBe(153);
+    expect(start.channels[6]).toBe(224);
     expect(start.channels[4]).toBe(255);
 
     const middle = looked("build", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
-    expect(middle.channels[6]).toBe(204);
+    expect(middle.channels[6]).toBe(240);
 
     // First half: quarter-note chops, full or off, on half of each beat.
     const quarterOn = looked("build", { beatsIntoPhrase: 2.25, beatPhase: 0.25, beatInBar: 3 });
@@ -160,16 +160,16 @@ describe("laser looks", () => {
     // A 16-bar breakdown: the ramp covers beats 32-64 only. Outside the ramp
     // the breakdown sits at its own shrunk size.
     const early = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
-    expect(early.channels[6]).toBe(137);
+    expect(early.channels[6]).toBe(226);
     const justBefore = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 31.5, beatPhase: 0.5, beatInBar: 4 });
-    expect(justBefore.channels[6]).toBe(137);
+    expect(justBefore.channels[6]).toBe(226);
 
     const rampStart = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 32, beatPhase: 0, beatInBar: 1 });
-    expect(rampStart.channels[6]).toBe(153);
+    expect(rampStart.channels[6]).toBe(224);
     const mid = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 40, beatPhase: 0, beatInBar: 1 });
-    expect(mid.channels[6]).toBe(179);
+    expect(mid.channels[6]).toBe(232);
     const late = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56, beatPhase: 0, beatInBar: 1 });
-    expect(late.channels[6]).toBe(230);
+    expect(late.channels[6]).toBe(247);
 
     // Last two bars of the ramp: sixteenth chops, on at the grid, off mid-grid.
     const sixteenthOn = looked("breakdown", { nextPhraseKind: "drop", beatsInPhrase: 64, beatsIntoPhrase: 56.5, beatPhase: 0.5, beatInBar: 1 });
@@ -189,13 +189,13 @@ describe("laser looks", () => {
 
   it("leaves a breakdown that leads into a groove un-ramped", () => {
     const insideWindow = looked("breakdown", { nextPhraseKind: "groove", beatsInPhrase: 64, beatsIntoPhrase: 56, beatPhase: 0, beatInBar: 1 });
-    expect(insideWindow.channels[6]).toBe(137);
+    expect(insideWindow.channels[6]).toBe(226);
     expect(insideWindow.channels[14]).toBe(84);
   });
 
   it("pulses size on bar downbeats in groove and every beat in drop", () => {
-    // Groove dynamics 0.54 sizes the phrase frame at 207.
-    const baseSize = Math.round(150 + 0.54 * 105);
+    // Groove dynamics 0.54 sizes the phrase frame at 238.
+    const baseSize = Math.round(217 + 0.54 * 38);
     const downbeat = looked("groove", { beatsIntoPhrase: 0, beatPhase: 0, beatInBar: 1 });
     expect(downbeat.channels[4]).toBe(255);
     expect(downbeat.channels[6]).toBe(255);
@@ -215,11 +215,12 @@ describe("laser looks", () => {
     const breakdown = looked("breakdown", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
     expect(breakdown.channels[4]).toBe(255);
     expect(breakdown.channels[8]).toBe(64);
-    // Phrase size 182, shrunk to three quarters.
-    expect(breakdown.channels[6]).toBe(137);
+    // Phrase size 228 sits at 226 in the breakdown band.
+    expect(breakdown.channels[6]).toBe(226);
 
     const groove = looked("groove", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 }, 0.5);
-    expect(groove.channels[8]).toBe(128);
+    // The base frame angle is the upright neutral, not the 180-degree 128.
+    expect(groove.channels[8]).toBe(0);
     // The bar downbeat accent bumps size straight to full.
     expect(groove.channels[6]).toBe(255);
   });
@@ -261,8 +262,8 @@ describe("laser looks", () => {
       context({ phraseKind: "build", beatsIntoPhrase: 16, beatPhase: 0.5, beatInBar: 1 })
     );
     expect(build.channels[16]).toBeGreaterThan(0);
-    expect(build.channels[19]).toBe(204);
-    expect(build.channels[21]).toBe(204);
+    expect(build.channels[19]).toBe(240);
+    expect(build.channels[21]).toBe(240);
 
     const breakdown = applyLaserLook(
       buildFb4Dmx16Frame({
@@ -312,7 +313,7 @@ describe("mid-phrase entry", () => {
   it("resumes a build ramp at the entry position", () => {
     // Entered halfway through a 32-beat build: ramp progress 0.5.
     const build = looked("build", { beatsIntoPhrase: 16, beatPhase: 0, beatInBar: 1 });
-    expect(build.channels[6]).toBe(204);
+    expect(build.channels[6]).toBe(240);
 
     // A breakdown's eight-bar pre-drop ramp resumes halfway too: 16 of 32 ramp beats.
     const breakdown = looked("breakdown", {
@@ -322,7 +323,7 @@ describe("mid-phrase entry", () => {
       beatPhase: 0,
       beatInBar: 1
     });
-    expect(breakdown.channels[6]).toBe(204);
+    expect(breakdown.channels[6]).toBe(240);
   });
 
   it("dips dark when a show is entered just before its drop", () => {
@@ -386,7 +387,9 @@ describe("dimmer is always full or off", () => {
                   );
                 }
                 const size = candidate.channels[sizeIndex(candidate)];
-                if (size < 0 || size > 255) {
+                // Every look stays in the 217-255 size band: below 128 the FB4
+                // mirrors the cue, and nothing should collapse toward it.
+                if (size < 217 || size > 255) {
                   throw new Error(`size ${size} out of envelope at kind=${kind} beat=${beatsIntoPhrase}`);
                 }
                 frames += 1;
@@ -408,7 +411,7 @@ describe("dimmer is always full or off", () => {
           const value = frame.channels[dimmerIndex(frame)];
           expect([0, 255]).toContain(value);
           const size = frame.channels[sizeIndex(frame)];
-          expect(size).toBeGreaterThanOrEqual(150);
+          expect(size).toBeGreaterThanOrEqual(217);
           expect(size).toBeLessThanOrEqual(255);
         }
       }

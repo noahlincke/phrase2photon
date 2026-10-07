@@ -68,9 +68,13 @@ export function buildFb4Dmx16Frame(input: Fb4Dmx16Input): Fb4Dmx16Frame {
   const pageNumber = explicitTarget?.page ?? fallbackTarget.page;
   const cueNumber = explicitTarget?.cue ?? fallbackTarget.cue;
   const intensity = input.lightingCue?.look.intensity ?? input.phrase.energy.dynamics;
-  // Energy used to dim; now it sizes: low energy stays small, peak fills out.
-  const size = Math.round(150 + Math.max(0, Math.min(1, intensity)) * 105);
-  const angle = Math.round(input.phraseProgress * 255);
+  // Energy sizes against the FB4's -100..100% band (128 = 0%, 255 = full):
+  // low energy sits at 70% of full (217), peak fills out to 100% (255). Below
+  // 128 the FB4 mirrors the cue, so sizes never go there.
+  const size = Math.round(217 + Math.max(0, Math.min(1, intensity)) * 38);
+  // Angle Z is 0..255 = 0..360 degrees, so 0 is the upright neutral; 128
+  // (= 180 degrees) drew every cue upside down.
+  const angle = 0;
   const color = fb4ColorForPalette(palette);
   const cueDescription = describeFb4Cue(pageNumber, cueNumber);
 
@@ -248,7 +252,7 @@ export function buildFb4ZoneFrame(bpm = 122): Fb4Dmx16Frame {
   channels[5] = 128;
   channels[6] = 255;
   channels[7] = 255;
-  channels[8] = 128;
+  channels[8] = 0;
   channels[9] = 128;
   channels[10] = 128;
   channels[11] = 255;
@@ -392,9 +396,12 @@ function baseCueChannels(input: { bpm: number; pageNumber: number; cueNumber: nu
     cueSpeedByte16(input.bpm),
     clampByte(input.dimmer),
     128,
-    160,
-    160,
-    128,
+    // Size X/Y: 255 = 100% of full area (the Square envelope Noah calibrates
+    // to); 160 sat at +25% and read tiny and bright. Angle Z: 0 degrees
+    // upright; 128 = 180 degrees drew cues upside down.
+    255,
+    255,
+    0,
     128,
     128,
     255,
